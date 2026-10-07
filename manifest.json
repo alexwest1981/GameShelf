@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "id": "custom.games",
+  "name": "GameShelf",
+  "version": "1.0.0",
+  "author": "Alex",
+  "license": "MIT",
+  "description": "One bar icon for every game installed on this machine: Steam, Lutris, Heroic and any folder you point it at, grouped by where the game came from. Sources and folders are settings.",
+  "kinds": [
+    "bar-widget",
+    "panel"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "GameShelf",
+    "description": "Every installed game in one bar icon.",
+    "category": "Utilities",
+    "aliases": [
+      "spel",
+      "gameshelf",
+      "launcher"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "sources": "steam,lutris,heroic,folders",
+      "folders": "~/Downloads,~/Games",
+      "hiddenIds": ""
+    },
+    "schema": [
+      {
+        "key": "sources",
+        "type": "string",
+        "label": "Sources",
+        "description": "Comma-separated list of launchers to scan: steam, lutris, heroic, folders.",
+        "defaultValue": "steam,lutris,heroic,folders"
+      },
+      {
+        "key": "folders",
+        "type": "string",
+        "label": "Folders to scan",
+        "description": "Comma-separated folders searched for games when the folders source is on (up to three levels down).",
+        "defaultValue": "~/Downloads,~/Games"
+      },
+      {
+        "key": "hiddenIds",
+        "type": "string",
+        "label": "Hide (IDs)",
+        "description": "Comma-separated game IDs to never list, e.g. steam:892970 or file:/home/you/Downloads/Some.Game",
+        "defaultValue": ""
+      }
+    ]
+  }
+}

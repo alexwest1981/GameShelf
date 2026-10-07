@@ -9,7 +9,7 @@
 #   bash install.sh --no-enable
 set -euo pipefail
 
-PLUGIN_ID=custom.games
+PLUGIN_ID=io.github.alexwest1981.gameshelf
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
 

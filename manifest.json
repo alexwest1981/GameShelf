@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "custom.games",
+  "id": "io.github.alexwest1981.gameshelf",
   "name": "GameShelf",
   "version": "1.0.0",
   "author": "Alex",

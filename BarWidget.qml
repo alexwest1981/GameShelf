@@ -9,7 +9,7 @@ import qs.Ui
 // the launching; this widget only counts, so the icon can show a number.
 BarWidget {
   id: root
-  moduleName: "custom.games"
+  moduleName: "io.github.alexwest1981.gameshelf"
 
   // The helper sits next to this file; find it by position, not by plugin name,
   // so a renamed copy still works.
@@ -80,8 +80,8 @@ BarWidget {
     tooltipText: root.tooltip
     onPressed: function(b) {
       if (!root.bar || !root.bar.shell) return
-      if (b === Qt.RightButton) root.bar.shell.toggle("custom.games", "{}")
-      else root.bar.shell.summon("custom.games", "{}")
+      if (b === Qt.RightButton) root.bar.shell.toggle("io.github.alexwest1981.gameshelf", "{}")
+      else root.bar.shell.summon("io.github.alexwest1981.gameshelf", "{}")
     }
   }
 }

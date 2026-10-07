@@ -7,7 +7,7 @@ import qs.Commons
 import qs.Ui
 
 // GameShelf launcher panel: every game found on this machine, grouped by where
-// it came from. Summon with:  omarchy-shell shell summon custom.games '<options>'
+// it came from. Summon with:  omarchy-shell shell summon io.github.alexwest1981.gameshelf '<options>'
 // The bar widget passes its own settings in that payload, so the panel and the
 // widget always scan with the same sources and folders.
 Item {
@@ -23,7 +23,7 @@ Item {
   property bool scanning: false
   property string scanError: ""
 
-  readonly property string pluginId: "custom.games"
+  readonly property string pluginId: "io.github.alexwest1981.gameshelf"
   readonly property string helper: Qt.resolvedUrl("scan-games.py").toString().replace("file://", "")
 
   readonly property color themeBg: Color.background
@@ -330,9 +330,9 @@ Item {
         Text {
           Layout.fillWidth: true
           text: "Sources and folders are settings:\n"
-            + "omarchy bar set custom.games sources \"steam,heroic,folders\"\n"
-            + "omarchy bar set custom.games folders \"~/Downloads,~/Games\"\n"
-            + "omarchy bar set custom.games hiddenIds \"steam:892970\""
+            + "omarchy bar set io.github.alexwest1981.gameshelf sources \"steam,heroic,folders\"\n"
+            + "omarchy bar set io.github.alexwest1981.gameshelf folders \"~/Downloads,~/Games\"\n"
+            + "omarchy bar set io.github.alexwest1981.gameshelf hiddenIds \"steam:892970\""
           color: root.themeMuted
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

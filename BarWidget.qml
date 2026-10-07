@@ -25,14 +25,19 @@ BarWidget {
     return "GameShelf — " + gameCount + " game" + (gameCount === 1 ? "" : "s")
   }
 
-  // Settings arrive as strings; the helper wants a JSON object.
-  readonly property string optionsJson: JSON.stringify({
-    sources: (settings && settings.sources) ? String(settings.sources) : "steam,lutris,heroic,folders",
-    folders: (settings && settings.folders) ? String(settings.folders) : "~/Downloads,~/Games",
-    hidden: (settings && settings.hiddenIds)
+  // Settings arrive as strings; the helper wants a JSON object. Built at scan
+  // time, not as a property binding: a binding evaluated before the host hands
+  // the widget its settings can stay empty, and an empty argument silently
+  // makes the scanner fall back to its own defaults (measured: the widget's
+  // scan ran with an empty argv[2] while the panel's worked).
+  function optionsJson() {
+    var sources = (settings && settings.sources) ? String(settings.sources) : "steam,lutris,heroic,folders"
+    var folders = (settings && settings.folders) ? String(settings.folders) : "~/Downloads,~/Games"
+    var hidden = (settings && settings.hiddenIds)
       ? String(settings.hiddenIds).split(",").filter(function(s) { return s.trim() !== "" })
       : []
-  })
+    return JSON.stringify({ sources: sources, folders: folders, hidden: hidden })
+  }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -49,7 +54,7 @@ BarWidget {
 
   function rescan() {
     if (!root.helper) return
-    scanProc.command = ["python3", root.helper, root.optionsJson]
+    scanProc.command = ["python3", root.helper, root.optionsJson()]
     scanProc.running = true
   }
 

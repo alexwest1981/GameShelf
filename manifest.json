@@ -26,7 +26,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "sources": "steam,lutris,heroic,folders",
+      "sources": "steam,shortcuts,lutris,heroic,desktop,folders",
       "folders": "~/Downloads,~/Games",
       "hiddenIds": ""
     },
@@ -35,8 +35,8 @@
         "key": "sources",
         "type": "string",
         "label": "Sources",
-        "description": "Comma-separated list of launchers to scan: steam, lutris, heroic, folders.",
-        "defaultValue": "steam,lutris,heroic,folders"
+        "description": "Comma-separated list of launchers to scan: steam, shortcuts, lutris, heroic, desktop, folders.",
+        "defaultValue": "steam,shortcuts,lutris,heroic,desktop,folders"
       },
       {
         "key": "folders",

@@ -6,8 +6,12 @@ Sources, each switchable in the plugin settings:
   steam    appmanifest_*.acf in every Steam library (libraryfolders.vdf lists
            them, so games on other drives are found too), minus Proton and
            the Steam Linux Runtimes, which are not games
+  shortcuts  non-Steam games added to Steam (userdata/<id>/config/shortcuts.vdf),
+           started through Steam so its Proton setup is the one that runs
   lutris   ~/.config/lutris/games/*.yml
   heroic   ~/.config/heroic/ side-loaded apps, Epic (legendary) and GOG
+  desktop  .desktop entries with Categories=Game (native, /usr/share and
+           Flatpak exports), minus the launchers of the other sources
   folders  executables that look like game launchers, up to DEPTH levels
            below each folder you configure
 
@@ -36,8 +40,10 @@ DEPTH = 3  # how deep below a configured folder we look for a game launcher
 
 SOURCE_LABELS = {
     "steam": "Steam",
+    "shortcuts": "Steam shortcuts",
     "lutris": "Lutris",
     "heroic": "Heroic",
+    "desktop": "Desktop",
     "folders": "Folders",
 }
 
@@ -107,6 +113,140 @@ def scan_steam(home, hidden):
                 "source": "steam",
                 "detail": f"appid {appid.group(1)}",
                 "launch": ["xdg-open", f"steam://rungameid/{appid.group(1)}"],
+            })
+    return games
+
+
+# ── Steam non-Steam shortcuts ────────────────────────────────────────────────
+
+def read_vdf(data, pos=0):
+    """Parse the binary KeyValues Steam writes for shortcuts.
+
+    ponytail: just the three types Valve emits here (object, string, int32);
+    an unknown type stops the walk instead of guessing at the rest.
+    """
+    out = {}
+    while pos < len(data):
+        kind = data[pos]
+        pos += 1
+        if kind == 0x08:                      # end of this object
+            return out, pos
+        end = data.index(b"\x00", pos)
+        key = data[pos:end].decode("utf-8", "replace")
+        pos = end + 1
+        if kind == 0x00:                      # nested object
+            value, pos = read_vdf(data, pos)
+        elif kind == 0x01:                    # string
+            end = data.index(b"\x00", pos)
+            value = data[pos:end].decode("utf-8", "replace")
+            pos = end + 1
+        elif kind == 0x02:                    # int32
+            value = int.from_bytes(data[pos:pos + 4], "little")
+            pos += 4
+        else:
+            return out, len(data)
+        out[key] = value
+    return out, pos
+
+
+def scan_shortcuts(home, hidden):
+    """Games added to Steam by hand. Steam keeps the launchable appid in the
+    entry, so no appid has to be recomputed from the exe path."""
+    games, seen = [], set()
+    for root in (f"{home}/.steam/steam", f"{home}/.local/share/Steam"):
+        for path in sorted(glob.glob(f"{root}/userdata/*/config/shortcuts.vdf")):
+            real = os.path.realpath(path)
+            if real in seen:
+                continue
+            seen.add(real)
+            try:
+                entries = read_vdf(open(real, "rb").read())[0].get("shortcuts") or {}
+            except Exception:
+                continue
+            for key in sorted(entries, key=lambda k: int(k) if str(k).isdigit() else 0):
+                entry = entries[key]
+                name = str(entry.get("AppName") or "").strip()
+                appid = entry.get("appid")
+                if not name or not isinstance(appid, int):
+                    continue
+                gid = f"shortcut:{appid}"
+                if gid in hidden:
+                    continue
+                exe = os.path.basename(str(entry.get("Exe") or "").strip('"'))
+                games.append({
+                    "id": gid,
+                    "name": re.sub(r"\.exe$", "", name, flags=re.I),
+                    "source": "shortcuts",
+                    "detail": f"Steam shortcut · {exe}" if exe else "Steam shortcut",
+                    "launch": ["xdg-open", f"steam://rungameid/{appid}"],
+                })
+    return games
+
+
+# ── Desktop entries that are games ───────────────────────────────────────────
+
+DESKTOP_DIRS = (
+    "{home}/.local/share/applications",
+    "/usr/share/applications",
+    "{home}/.local/share/flatpak/exports/share/applications",
+    "/var/lib/flatpak/exports/share/applications",
+)
+
+# Front ends for other libraries or for streaming: they start games, they are
+# not games. Whatever is inside them comes from the sources that own it. Matched
+# on the entry's own name (a reverse-DNS id ends in it), so a game that merely
+# has "steam" in its title is left alone.
+LAUNCHER_ENTRY = {
+    "steam", "lutris", "heroic", "heroicgameslauncher", "moonlight", "playnite",
+    "bottles", "itch", "itchio", "retroarch", "prism", "prismlauncher", "heroic-launcher",
+}
+
+
+def scan_desktop(opts, hidden):
+    """Games that ship a .desktop entry. `desktopDirs` overrides where to look
+    (the selftest uses it so the real system directories stay out)."""
+    home = home_of(opts)
+    dirs = opts.get("desktopDirs") or DESKTOP_DIRS
+    if isinstance(dirs, str):
+        dirs = dirs.split(",")
+    games, seen = [], set()
+    for pattern in dirs:
+        for path in sorted(glob.glob(os.path.join(pattern.format(home=home), "*.desktop"))):
+            real = os.path.realpath(path)
+            if real in seen:
+                continue
+            seen.add(real)
+            try:
+                text = open(real, errors="replace").read()
+            except OSError:
+                continue
+            if not re.search(r"^Categories=.*\bGame\b", text, re.M):
+                continue
+            if re.search(r"^NoDisplay=true", text, re.M):
+                continue
+            name = re.search(r"^Name=(.+)$", text, re.M)
+            command = re.search(r"^Exec=(.+)$", text, re.M)
+            if not (name and command):
+                continue
+            stem = os.path.splitext(os.path.basename(path))[0]
+            # "net.lutris.Lutris" -> "lutris": the entry's own name is the last
+            # part of a reverse-DNS id.
+            if stem.split(".")[-1].lower() in LAUNCHER_ENTRY or NOT_A_GAME.search(name.group(1)):
+                continue
+            # A shortcut to a Steam game: the Steam source already lists it.
+            if "steam://rungameid/" in command.group(1):
+                continue
+            gid = f"desktop:{stem}"
+            if gid in hidden:
+                continue
+            binary = os.path.basename(command.group(1).split()[0])
+            games.append({
+                "id": gid,
+                "name": name.group(1).strip(),
+                "source": "desktop",
+                "detail": binary,
+                # gio launches by file path and handles Flatpak exports alike.
+                "launch": ["gio", "launch", path],
             })
     return games
 
@@ -279,6 +419,11 @@ def scan(opts):
             games += scan_steam(home, hidden)
         except Exception as e:
             errors.append(f"steam: {e}")
+    if "shortcuts" in sources:
+        try:
+            games += scan_shortcuts(home, hidden)
+        except Exception as e:
+            errors.append(f"shortcuts: {e}")
     if "lutris" in sources:
         try:
             games += scan_lutris(home, hidden)
@@ -292,6 +437,11 @@ def scan(opts):
             games += heroic
         except Exception as e:
             errors.append(f"heroic: {e}")
+    if "desktop" in sources:
+        try:
+            games += scan_desktop(opts, hidden)
+        except Exception as e:
+            errors.append(f"desktop: {e}")
     if "folders" in sources:
         try:
             games += scan_folders(opts, hidden, used_exe)
@@ -332,8 +482,43 @@ def selftest():
                           "install": {"executable": f"{tmp}/games/vc/start.sh"}}]},
               open(f"{tmp}/.config/heroic/sideload_apps/library.json", "w"))
 
-    out = scan({"home": tmp, "sources": ["steam", "lutris", "heroic", "folders"],
-                "folders": [f"{tmp}/games"]})
+    # Non-Steam shortcuts: the binary KeyValues Steam writes them in.
+    def bin_vdf(entries):
+        blob = b"\x00shortcuts\x00"
+        for index, entry in enumerate(entries):
+            blob += b"\x00" + str(index).encode() + b"\x00"
+            blob += b"\x01AppName\x00" + entry["name"].encode() + b"\x00"
+            if "exe" in entry:
+                blob += b"\x01Exe\x00" + entry["exe"].encode() + b"\x00"
+            if "appid" in entry:
+                blob += b"\x02appid\x00" + entry["appid"].to_bytes(4, "little")
+            blob += b"\x08"
+        return blob + b"\x08"
+
+    shortcuts_dir = f"{tmp}/.steam/steam/userdata/0/config"
+    os.makedirs(shortcuts_dir)
+    open(f"{shortcuts_dir}/shortcuts.vdf", "wb").write(bin_vdf([
+        {"name": "Tiny Bubbles.exe", "exe": f"{tmp}/games/TinyBubbles.exe", "appid": 987654},
+        {"name": "No appid at all"},   # nothing to launch with: must be skipped
+    ]))
+
+    # Desktop entries: a game, a launcher, a Steam shortcut and a hidden one.
+    apps = f"{tmp}/.local/share/applications"
+    os.makedirs(apps)
+
+    def desktop(stem, name, command, extra=""):
+        open(f"{apps}/{stem}.desktop", "w").write(
+            f"[Desktop Entry]\nType=Application\nName={name}\nExec={command}\n"
+            f"Categories=Game;\n{extra}")
+
+    desktop("tiny-game", "Tiny Desktop Game", "tiny-game --play")
+    desktop("steam", "Steam", "/usr/bin/steam %U")
+    desktop("net.lutris.Lutris", "Lutris", "lutris %U")
+    desktop("valheim", "Valheim", "steam steam://rungameid/892970")
+    desktop("nodisplay", "Secret Game", "secret", extra="NoDisplay=true\n")
+
+    out = scan({"home": tmp, "sources": ["steam", "shortcuts", "lutris", "heroic", "desktop", "folders"],
+                "folders": [f"{tmp}/games"], "desktopDirs": [apps]})
     ids = {g["id"]: g for g in out["games"]}
     assert "steam:123" in ids, ids
     assert "steam:9" not in ids, "Proton is not a game"
@@ -341,6 +526,13 @@ def selftest():
     assert "lutris:lutris-demo" in ids, ids
     assert not any(g["source"] == "folders" for g in out["games"]), \
         "the side-loaded executable must not also be listed as a folder game"
+    assert out["counts"]["shortcuts"] == 1, "the entry without an appid is not launchable"
+    assert ids["shortcut:987654"]["name"] == "Tiny Bubbles", ids["shortcut:987654"]
+    assert ids["shortcut:987654"]["launch"] == ["xdg-open", "steam://rungameid/987654"]
+    assert ids["desktop:tiny-game"]["launch"][:2] == ["gio", "launch"], ids["desktop:tiny-game"]
+    assert not [i for i in ("desktop:steam", "desktop:net.lutris.Lutris", "desktop:valheim",
+                            "desktop:nodisplay") if i in ids], \
+        "a launcher, a reverse-DNS launcher, a Steam shortcut and a NoDisplay entry are not games"
     out2 = scan({"home": tmp, "sources": ["steam"], "folders": [f"{tmp}/games"],
                  "hidden": ["steam:123"]})
     assert out2["games"] == [], out2

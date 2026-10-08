@@ -45,17 +45,29 @@ Item {
     return families[0] || "sans-serif"
   }
 
-  readonly property var sectionOrder: ["steam", "lutris", "heroic", "folders"]
+  readonly property var sectionOrder: ["steam", "shortcuts", "lutris", "heroic", "desktop", "folders"]
   readonly property var sectionLabels: ({
-    steam: "Steam", lutris: "Lutris", heroic: "Heroic", folders: "Folders"
+    steam: "Steam", shortcuts: "Steam shortcuts", lutris: "Lutris",
+    heroic: "Heroic", desktop: "Desktop", folders: "Folders"
   })
+
+  // The filter narrows what the list shows; sections without a hit drop out
+  // by themselves because rows skips empty ones.
+  property string filter: ""
+  readonly property var visibleGames: {
+    var q = filter.trim().toLowerCase()
+    if (q === "") return games
+    return games.filter(function(g) {
+      return (String(g.name) + " " + String(g.detail) + " " + String(g.source)).toLowerCase().indexOf(q) >= 0
+    })
+  }
 
   // Section header + game rows flattened into one model for a single ListView.
   readonly property var rows: {
     var out = []
     for (var i = 0; i < sectionOrder.length; i++) {
       var key = sectionOrder[i]
-      var mine = games.filter(function(g) { return g.source === key })
+      var mine = visibleGames.filter(function(g) { return g.source === key })
       if (mine.length === 0) continue
       out.push({ header: sectionLabels[key], count: mine.length })
       for (var j = 0; j < mine.length; j++) out.push({ game: mine[j] })
@@ -69,7 +81,7 @@ Item {
   function defaultOptions() {
     var d = (manifest && manifest.barWidget && manifest.barWidget.defaults) || {}
     return {
-      sources: d.sources || "steam,lutris,heroic,folders",
+      sources: d.sources || "steam,shortcuts,lutris,heroic,desktop,folders",
       folders: d.folders || "~/Downloads,~/Games",
       hidden: []
     }
@@ -273,6 +285,9 @@ Item {
               text: {
                 if (root.scanning && root.games.length === 0) return "Scanning…"
                 if (root.games.length === 0) return "No games found in the selected sources"
+                if (root.filter.trim() !== "") {
+                  return root.visibleGames.length + " of " + root.games.length + " games match"
+                }
                 var n = root.games.length
                 return n + " game" + (n === 1 ? "" : "s") + " · grouped by launcher"
               }
@@ -298,6 +313,19 @@ Item {
         }
 
         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.lineColor }
+
+        // ── Filter: with every source on, the list is longer than the panel
+        TextField {
+          id: filterField
+          Layout.fillWidth: true
+          placeholderText: "Type to filter " + root.games.length + " games"
+          onTextChanged: root.filter = text
+          // Escape empties the field first, and only then closes the panel.
+          Keys.onEscapePressed: function(event) {
+            if (text !== "") { text = ""; event.accepted = true }
+            else event.accepted = false
+          }
+        }
 
         Text {
           Layout.fillWidth: true

@@ -31,7 +31,7 @@ BarWidget {
   // makes the scanner fall back to its own defaults (measured: the widget's
   // scan ran with an empty argv[2] while the panel's worked).
   function optionsJson() {
-    var sources = (settings && settings.sources) ? String(settings.sources) : "steam,lutris,heroic,folders"
+    var sources = (settings && settings.sources) ? String(settings.sources) : "steam,shortcuts,lutris,heroic,desktop,folders"
     var folders = (settings && settings.folders) ? String(settings.folders) : "~/Downloads,~/Games"
     var hidden = (settings && settings.hiddenIds)
       ? String(settings.hiddenIds).split(",").filter(function(s) { return s.trim() !== "" })

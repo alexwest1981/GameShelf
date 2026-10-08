@@ -75,9 +75,12 @@ Item {
     var opts = defaultOptions()
     try {
       var given = JSON.parse(String(payloadJson || ""))
-      if (given && given.sources) opts.sources = given.sources
-      if (given && given.folders) opts.folders = given.folders
-      if (given && given.hidden) opts.hidden = given.hidden
+      // The payload is whatever the caller sends; the scanner ignores keys it
+      // does not know, so pass everything through (a test can point `home` at
+      // a made-up library, for instance).
+      for (var key in given) {
+        if (given[key] !== undefined && given[key] !== null) opts[key] = given[key]
+      }
     } catch (e) { /* empty payload: defaults are fine */ }
     optionsJson = JSON.stringify(opts)
     rescan()

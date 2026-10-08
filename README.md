@@ -39,9 +39,17 @@ so removing the plugin removes them with it.
 
 ## Settings
 
+Folders are picked in the panel: **Folders → + Add** opens a folder picker, and
+the × on a chip takes that folder out again. The list is written to the bar
+layout entry, so it lives with the widget and survives a reinstall. A folder
+that is already listed (with or without a trailing slash) is not added twice.
+
+Sources and hidden games are set on the command line, and `folders` still works
+there too — for a script, or for a machine you are setting up over ssh:
+
 ```bash
 omarchy bar set io.github.alexwest1981.gameshelf sources "steam,heroic,folders"   # drop lutris
-omarchy bar set io.github.alexwest1981.gameshelf folders "~/Downloads,~/Games"    # where folders looks
+omarchy bar set io.github.alexwest1981.gameshelf folders "~/Downloads,~/Games"    # same list as the panel
 omarchy bar set io.github.alexwest1981.gameshelf hiddenIds "steam:892970"         # never list this one
 ```
 

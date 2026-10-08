@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
@@ -22,6 +23,10 @@ Item {
   property var games: []
   property bool scanning: false
   property string scanError: ""
+
+  // The folders the scanner walks, as the panel's own list: shown under the
+  // game list, added with a folder picker, written back as a bar setting.
+  property var foldersList: []
 
   readonly property string pluginId: "io.github.alexwest1981.gameshelf"
   readonly property string helper: Qt.resolvedUrl("scan-games.py").toString().replace("file://", "")
@@ -83,6 +88,7 @@ Item {
       }
     } catch (e) { /* empty payload: defaults are fine */ }
     optionsJson = JSON.stringify(opts)
+    foldersList = parseList(opts.folders)
     rescan()
   }
 
@@ -114,6 +120,81 @@ Item {
     // Detached: Steam/Heroic/Lutris are started through their URI handler, a
     // folder game is its own executable. Nothing here may die with the panel.
     Quickshell.execDetached(game.launch)
+  }
+
+  // ── Folders: pick them here, no CLI ──────────────────────────────────
+  // A comma string in the settings, a trimmed list in the panel. Anything
+  // else (a payload from a test, an array) is accepted too.
+  function parseList(value) {
+    if (value === undefined || value === null) return []
+    var raw = (typeof value === "string") ? value.split(",") : value
+    var out = []
+    for (var i = 0; i < raw.length; i++) {
+      var item = String(raw[i]).trim()
+      if (item !== "" && out.indexOf(item) < 0) out.push(item)
+    }
+    return out
+  }
+
+  function homePath() {
+    var opts = {}
+    try { opts = JSON.parse(root.optionsJson) } catch (e) { }
+    return String(opts.home || "")
+  }
+
+  // Show a path the way the settings carry it: home as ~.
+  function prettyPath(path) {
+    var home = homePath()
+    if (home !== "" && path.indexOf(home + "/") === 0) return "~" + path.substring(home.length)
+    var m = String(path).match("^/home/[^/]+")
+    return m ? "~" + path.substring(m[0].length) : path
+  }
+
+  function setFolders(list) {
+    foldersList = list
+    var value = list.join(",")
+    // The shell owns the settings; writing them is the CLI's job, and the
+    // widget re-reads them from shell.json and rescans (onSettingsChanged).
+    setProc.command = ["omarchy", "bar", "set", root.pluginId, "folders", value]
+    setProc.running = true
+    // The panel scans with what it just picked even before that lands.
+    try {
+      var opts = JSON.parse(root.optionsJson)
+      opts.folders = value
+      optionsJson = JSON.stringify(opts)
+    } catch (e) { }
+    rescan()
+  }
+
+  function addFolder(folder) {
+    var path = String(folder || "")
+    if (path.indexOf("file://") === 0) path = path.substring(7)
+    try { path = decodeURIComponent(path) } catch (e) { }
+    // A trailing slash is the same folder as no slash: FolderDialog sends one.
+    while (path.length > 1 && path.charAt(path.length - 1) === "/") path = path.slice(0, -1)
+    if (path === "" || foldersList.indexOf(path) >= 0) return
+    setFolders(foldersList.concat([path]))
+  }
+
+  function removeFolder(folder) {
+    setFolders(foldersList.filter(function(f) { return f !== folder }))
+  }
+
+  // The picker lives in the window (a Qt dialog needs the window that opens
+  // it), and the button goes through here so a test can open it too.
+  function openFolderPicker() {
+    folderDialog.open()
+  }
+
+  Process {
+    id: setProc
+    running: false
+    stderr: StdioCollector { id: setErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) return
+      root.scanError = "could not save the folder setting (exit " + exitCode + ")"
+        + (setErr.text ? ": " + String(setErr.text).trim() : "")
+    }
   }
 
   Process {
@@ -329,18 +410,88 @@ Item {
           font.pixelSize: Style.font.body
         }
 
-        // ── Footer: where the settings live ─────────────────────────
-        Text {
+        // ── Folders: picked here, stored as a bar setting ───────────
+        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.lineColor }
+
+        RowLayout {
           Layout.fillWidth: true
-          text: "Sources and folders are settings:\n"
-            + "omarchy bar set io.github.alexwest1981.gameshelf sources \"steam,heroic,folders\"\n"
-            + "omarchy bar set io.github.alexwest1981.gameshelf folders \"~/Downloads,~/Games\"\n"
-            + "omarchy bar set io.github.alexwest1981.gameshelf hiddenIds \"steam:892970\""
-          color: root.themeMuted
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
+          spacing: Style.space(8)
+
+          Text {
+            text: "Folders"
+            color: root.themeMuted
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Flow {
+            Layout.fillWidth: true
+            spacing: Style.space(6)
+
+            Repeater {
+              model: root.foldersList
+              delegate: Rectangle {
+                id: chip
+                readonly property string folder: String(modelData)
+                width: Math.min(chipRow.implicitWidth + Style.space(14), 240)
+                height: Style.space(24)
+                radius: Style.cornerRadius
+                color: "transparent"
+                border.color: root.lineColor
+                border.width: 1
+
+                RowLayout {
+                  id: chipRow
+                  anchors.fill: parent
+                  anchors.leftMargin: Style.space(7)
+                  anchors.rightMargin: Style.space(3)
+                  spacing: Style.space(2)
+
+                  Text {
+                    Layout.fillWidth: true
+                    text: root.prettyPath(chip.folder)
+                    color: root.themeFg
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideMiddle
+                  }
+
+                  Text {
+                    Layout.preferredWidth: Style.space(16)
+                    text: String.fromCodePoint(0x00D7)
+                    color: removeHover.hovered ? root.themeUrgent : root.themeMuted
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    HoverHandler { id: removeHover }
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.removeFolder(chip.folder)
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          Button {
+            text: "+ Add"
+            foreground: root.themeAccent
+            bordered: true
+            tooltipText: "Pick a folder that holds your game launchers"
+            onClicked: root.openFolderPicker()
+          }
         }
+      }
+
+      // A Qt dialog needs the window that opens it, so the picker belongs to
+      // this window, not to the panel object outside it.
+      FolderDialog {
+        id: folderDialog
+        title: "Add a folder to scan"
+        onAccepted: root.addFolder(folderDialog.selectedFolder)
       }
     }
   }

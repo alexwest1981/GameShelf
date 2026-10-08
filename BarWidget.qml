@@ -85,8 +85,13 @@ BarWidget {
     tooltipText: root.tooltip
     onPressed: function(b) {
       if (!root.bar || !root.bar.shell) return
-      if (b === Qt.RightButton) root.bar.shell.toggle("io.github.alexwest1981.gameshelf", "{}")
-      else root.bar.shell.summon("io.github.alexwest1981.gameshelf", "{}")
+      // Settings live on the bar's layout entry, and only this widget can read
+      // them (there is no `omarchy bar get`), so the panel is handed them with
+      // the summon: without the payload it scans the defaults and the folder
+      // row would show folders that are not the configured ones.
+      var payload = root.optionsJson()
+      if (b === Qt.RightButton) root.bar.shell.toggle(root.moduleName, payload)
+      else root.bar.shell.summon(root.moduleName, payload)
     }
   }
 }

@@ -5,7 +5,7 @@ games you added to it), Lutris, Heroic, anything with a game entry in your
 application menu, and any folder you point it at. Click the controller, type a
 few letters, play.
 
-![GameShelf](preview.png)
+![GameShelf](preview.jpg)
 
 [OmaGames](https://github.com/davidsmorais/omarchy-omagames) lists Omarchy *game
 plugins*. A Steam, Lutris or Heroic library is not a plugin and can never appear

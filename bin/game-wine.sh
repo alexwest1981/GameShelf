@@ -20,7 +20,29 @@ mode=run
 case "${1:-}" in
     --prefix) mode=prefix; shift ;;
     --setup)  mode=setup;  shift ;;
+    --selftest) mode=selftest ;;
 esac
+
+if [ "$mode" = selftest ]; then
+    # The one thing that broke silently in the live run: wine does not create the
+    # folder above the prefix, so it has to exist before the game is started.
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/dir"          # readlink -f needs every parent to exist
+    p=$(GAMESHELF_WINE_DIR="$tmp/wine" "$0" --prefix "$tmp/dir/Game.exe")
+    case "$p" in
+        "$tmp/wine"/*) ok="prefix is under the configured dir" ;;
+        *) ok="" ;;
+    esac
+    if [ -n "$ok" ] && [ -d "$(dirname "$p")" ]; then
+        echo "selftest ok: $p"
+    else
+        echo "selftest FAILED: parent of $p was not created" >&2
+        rm -rf "$tmp"
+        exit 1
+    fi
+    rm -rf "$tmp"
+    exit 0
+fi
 
 exe=$(readlink -f "$1")
 shift
@@ -41,6 +63,9 @@ esac
 key=$(printf '%s' "$dir" | md5sum | cut -c1-8)
 slug=$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-' | cut -c1-40)
 export WINEPREFIX="${GAMESHELF_WINE_DIR:-$HOME/.local/share/gameshelf/wine}/$slug-$key"
+# Wine makes the prefix but not the folder above it, and a missing parent is a
+# silent no-launch ("wine: chdir to <prefix>: No such file or directory").
+mkdir -p "$(dirname "$WINEPREFIX")"
 
 if [ "$mode" = prefix ]; then
     printf '%s\n' "$WINEPREFIX"

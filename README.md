@@ -127,12 +127,13 @@ python3 scan-games.py --selftest   # builds a fixture tree: every source must fi
   source finds, wrong for a game that wants real Proton (add that one to Steam
   instead) and untuned for a game with its own `winetricks` recipe. The prefix is
   per game but nobody tunes it for you.
-- **A modern Unreal title is exactly the case Wine alone does not cover.**
-  Measured on an Unreal Engine 5.6 repack: Wine 11 + `vcrun2022` in the game's own
-  prefix reached the main menu and the menu drew, while the 3D viewport stayed
-  white — wined3d is not what UE5.6's renderer targets. Anything UE5-shaped
-  belongs in Steam as a non-Steam game, where Proton brings DXVK. The `.exe` row
-  is still the right row to *find* it with.
+- **A modern Unreal title under Wine is unproven.** Measured on an Unreal Engine
+  5.6 repack: Wine 11 + `vcrun2022` in the game's own prefix reached its main menu
+  with the menu drawn, while the 3D viewport stayed white — but that run was on a
+  virtual display with no GPU (`Xvfb`, and Wine's own EGL init failed there with
+  `MESA-EGL: egl: failed to create dri2 screen`), so it says nothing about a real
+  GPU. If it stays white on your own screen, that one belongs in Steam, where
+  Proton brings DXVK. The `.exe` row is still the right row to *find* it with.
 - **Epic and GOG libraries are read defensively** — neither was installed when
   this was written, so those branches are unverified until they hold a game.
 - **A shortcut without an appid is skipped.** Steam writes one for every entry it

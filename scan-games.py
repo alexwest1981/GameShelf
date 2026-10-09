@@ -449,12 +449,18 @@ def scan_folders(opts, hidden, known_dirs):
                     "launch": [WINE_RUN, real],
                 })
                 continue
+            # A repack that lost its exec bits in the unpack still starts: a
+            # script without +x is given to bash, because the kernel's EACCES is
+            # silent in the panel (nothing happens, no error anywhere).
+            launch = [real]
+            if real.endswith((".sh", ".run")) and not os.access(real, os.X_OK):
+                launch = ["bash", real]
             games.append({
                 "id": gid,
                 "name": name or real,
                 "source": "folders",
                 "detail": real.replace(home, "~"),
-                "launch": [real],
+                "launch": launch,
             })
     return games
 
@@ -539,6 +545,8 @@ def selftest():
     for exe in ("ToyShopTidyUp.exe", "UnityCrashHandler64.exe"):
         open(f"{tmp}/games/Toys.Shop.Tidy.Up/game/{exe}", "w").write("MZ")
     # A repack with a native starter and a Windows exe deeper down: one row.
+    os.makedirs(f"{tmp}/games/OldPack")
+    open(f"{tmp}/games/OldPack/start.sh", "w").write("#!/bin/sh\n")   # mode 0644 on purpose
     os.makedirs(f"{tmp}/games/Guacamelee/files/game-root")
     open(f"{tmp}/games/Guacamelee/files/game-root/Guacamelee.exe", "w").write("MZ")
     open(f"{tmp}/games/Guacamelee/start.n.sh", "w").write("#!/bin/sh\n")
@@ -590,8 +598,11 @@ def selftest():
     assert ids["heroic:abc"]["launch"] == [f"{tmp}/games/vc/start.sh"], ids["heroic:abc"]
     assert "lutris:lutris-demo" in ids, ids
     folders = [g for g in out["games"] if g["source"] == "folders"]
-    assert sorted(g["name"] for g in folders) == ["Guacamelee", "Toys Shop Tidy Up"], folders
+    assert sorted(g["name"] for g in folders) == ["Guacamelee", "OldPack", "Toys Shop Tidy Up"], folders
     # realpath: TMPDIR is a symlinked path on this box and the ids are real paths.
+    old = os.path.realpath(f"{tmp}/games/OldPack/start.sh")
+    assert ids["file:" + old]["launch"] == ["bash", old], \
+        "a starter without the exec bit goes through bash, not EACCES"
     toy = os.path.realpath(f"{tmp}/games/Toys.Shop.Tidy.Up/game/ToyShopTidyUp.exe")
     assert ids["file:" + toy]["launch"] == [WINE_RUN, toy], folders
     guac = os.path.realpath(f"{tmp}/games/Guacamelee/start.n.sh")

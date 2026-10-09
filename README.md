@@ -78,7 +78,7 @@ the panel).
 | **Lutris** | `~/.config/lutris/games/*.yml` | `lutris:rungame/<slug>` |
 | **Heroic** | side-loaded apps, Epic (`legendary`) and GOG libraries under `~/.config/heroic/` | the game's own executable, otherwise `heroic://launch/<runner>/<app_name>` |
 | **Desktop** | `.desktop` entries with `Categories=Game` in `~/.local/share/applications`, `/usr/share/applications` and the Flatpak exports. Entries that are a front end for another library (Steam, Lutris, Heroic, Moonlight, Bottles, itch, RetroArch, Prism) are left to the source that owns their games | `gio launch <entry>` |
-| **Folders** | one starter per folder: the native starter if there is one, then an AppImage, then a bare `.exe` through Wine; helper scripts, installers and crash handlers are skipped | the executable itself, an `.exe` through `bin/game-wine.sh` |
+| **Folders** | one starter per folder: the native starter if there is one, then an AppImage, then a bare `.exe` through Wine; helper scripts, installers and crash handlers are skipped | the executable itself — a script that lost its exec bit in the unpack goes through `bash` — and an `.exe` through `bin/game-wine.sh` |
 
 A folder whose only playable thing is a Windows `.exe` (a repack with `game/Game.exe`
 and nothing else) becomes a normal row, started through Wine in a **prefix of its

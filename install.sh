@@ -13,17 +13,17 @@ PLUGIN_ID=io.github.alexwest1981.gameshelf
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
 
-FILES=(manifest.json BarWidget.qml Panel.qml scan-games.py)
+FILES=(manifest.json BarWidget.qml Panel.qml scan-games.py bin/game-wine.sh)
 
 echo "== installerar $PLUGIN_ID -> $DEST"
-mkdir -p "$DEST"
+mkdir -p "$DEST/bin"
 for f in "${FILES[@]}"; do
   [ -f "$SRC/$f" ] || { echo "  saknas: $f"; exit 1; }
   install -m 0644 "$SRC/$f" "$DEST/$f"
   echo "  $f"
 done
-# The helper must be runnable by hand too (the README documents the manual scan).
-chmod 0755 "$DEST/scan-games.py"
+# Both helpers are run by hand as well (the README documents the manual scan).
+chmod 0755 "$DEST/scan-games.py" "$DEST/bin/game-wine.sh"
 
 echo "== validerar"
 if omarchy plugin validate "$DEST"; then

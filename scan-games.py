@@ -55,10 +55,24 @@ NOT_A_GAME = re.compile(r"steam linux runtime|proton|^steamworks", re.I)
 # patch.sh) that would each become a "game".
 LAUNCHER = re.compile(r"^(start|run|launch|play|game)|\.(AppImage|run)$", re.I)
 SKIP_FILE = re.compile(
-    r"\.(so|dll|py|desktop|txt|md|json|log|exe|bat|zip|7z|tar|gz)$"
+    r"\.(so|dll|py|desktop|txt|md|json|log|bat|zip|7z|tar|gz)$"
     r"|install|setup|uninstall|patch|update|config|fix|readme|actions|library",
     re.I,
 )
+# Something that ships inside a game folder but is never the game you came for.
+NOT_THE_GAME = re.compile(
+    r"unitycrashhandler|crashhandler|crashreport|errorreport|blizzarderror|unins"
+    r"|vcredist|vc_redist|dxsetup|dxwebsetup|oalinst|dotnetfx|prereq|redist"
+    r"|setup|install|updater|notification_helper|steamclient_loader",
+    re.I,
+)
+# Folders a repack drops the game into; the title comes from further up.
+GENERIC_DIR = re.compile(
+    r"^(game|games|bin|x64|x86|win64|win32|data|files|dist|build|release|app|contents|windows|linux|macos)$",
+    re.I,
+)
+# The Wine starter, found next to this file so a renamed plugin folder still works.
+WINE_RUN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bin", "game-wine.sh")
 
 
 def home_of(opts):
@@ -339,8 +353,27 @@ def scan_heroic(home, hidden):
 
 # ── Configured folders ───────────────────────────────────────────────────────
 
+def launcher_rank(entry):
+    """How good a starter is this file, or None when it is not one at all.
+
+    Native starter first, AppImage next, any other script, and last of all a
+    bare Windows executable - which needs Wine and only wins in a folder that
+    has nothing else in it.
+    """
+    name = entry.name
+    if name.lower().endswith(".exe"):
+        return None if NOT_THE_GAME.search(name) else 4
+    if SKIP_FILE.search(name) or not LAUNCHER.search(name):
+        return None
+    if not (name.endswith((".sh", ".AppImage", ".run")) or os.access(entry.path, os.X_OK)):
+        return None
+    return 0 if re.match(r"(?i)start\.n", name) else \
+           1 if name.endswith(".AppImage") else \
+           2 if re.match(r"(?i)start", name) else 3
+
+
 def walk_launchers(root, depth=DEPTH):
-    """Yield (directory, best_launcher) for each folder holding a game starter.
+    """Yield the best launcher in each folder below root that holds one.
 
     ponytail: one row per directory, so a repack that ships both a native and a
     Wine starter (start.n.sh / start.e-w.sh) yields one game, not two. Prefer
@@ -349,6 +382,7 @@ def walk_launchers(root, depth=DEPTH):
     root = os.path.expanduser(root)
     if not os.path.isdir(root):
         return
+    found = {}
     stack = [(root, 0)]
     while stack:
         path, level = stack.pop()
@@ -362,18 +396,29 @@ def walk_launchers(root, depth=DEPTH):
                 if level + 1 < depth and not e.name.startswith("."):
                     stack.append((e.path, level + 1))
                 continue
-            if SKIP_FILE.search(e.name) or not LAUNCHER.search(e.name):
-                continue
-            if not (e.name.endswith((".sh", ".AppImage", ".run")) or os.access(e.path, os.X_OK)):
-                continue
-            # native starter first, AppImage next, Wine/other last
-            rank = 0 if re.match(r"(?i)start\.n", e.name) else \
-                   1 if e.name.endswith(".AppImage") else \
-                   2 if re.match(r"(?i)start", e.name) else 3
-            if best is None or rank < best[0]:
+            rank = launcher_rank(e)
+            if rank is not None and (best is None or rank < best[0]):
                 best = (rank, e.path)
         if best and os.path.dirname(best[1]) != os.path.realpath(root):
-            yield best[1]
+            found[os.path.dirname(best[1])] = best
+    # The .exe a repack keeps under files/game-root is the same game as the
+    # start.e-w.sh above it, so a rung only survives when no ancestor folder
+    # already has a starter at least as good.
+    for d in sorted(found):
+        rank, path = found[d]
+        if any(d != k and d.startswith(k.rstrip("/") + "/") and found[k][0] <= rank
+               for k in found):
+            continue
+        yield path
+
+
+def _folder_title(path):
+    """Folder name for a game, climbing past the containers a repack puts it in."""
+    while True:
+        name = os.path.basename(path.rstrip("/"))
+        if not GENERIC_DIR.match(name) or path in ("", "/"):
+            return name
+        path = os.path.dirname(path)
 
 
 def scan_folders(opts, hidden, known_dirs):
@@ -385,15 +430,25 @@ def scan_folders(opts, hidden, known_dirs):
     for folder in folders:
         if not str(folder).strip():
             continue
-        for exe in walk_launchers(str(folder).strip()):
-            real = os.path.realpath(exe)
+        for starter in walk_launchers(str(folder).strip()):
+            real = os.path.realpath(starter)
             if os.path.dirname(real) in known_dirs:
                 continue  # a launcher already lists this folder
             known_dirs.add(os.path.dirname(real))
             gid = "file:" + real
             if gid in hidden:
                 continue
-            name = re.sub(r"[._-]+", " ", os.path.basename(os.path.dirname(real))).strip()
+            name = re.sub(r"[._-]+", " ", _folder_title(os.path.dirname(real))).strip()
+            if real.lower().endswith(".exe"):
+                # A bare Windows game: Wine, in a prefix of its own.
+                games.append({
+                    "id": gid,
+                    "name": name or os.path.basename(real),
+                    "source": "folders",
+                    "detail": "Wine \u00b7 " + real.replace(home, "~"),
+                    "launch": [WINE_RUN, real],
+                })
+                continue
             games.append({
                 "id": gid,
                 "name": name or real,
@@ -478,6 +533,16 @@ def selftest():
     os.makedirs(f"{tmp}/games/vc")
     open(f"{tmp}/games/vc/start.sh", "w").write("#!/bin/sh\n")
     os.chmod(f"{tmp}/games/vc/start.sh", 0o755)
+    # A folder whose only starter is a bare Windows executable, with the crash
+    # handler that ships beside it (which is not a second game).
+    os.makedirs(f"{tmp}/games/Toys.Shop.Tidy.Up/game")
+    for exe in ("ToyShopTidyUp.exe", "UnityCrashHandler64.exe"):
+        open(f"{tmp}/games/Toys.Shop.Tidy.Up/game/{exe}", "w").write("MZ")
+    # A repack with a native starter and a Windows exe deeper down: one row.
+    os.makedirs(f"{tmp}/games/Guacamelee/files/game-root")
+    open(f"{tmp}/games/Guacamelee/files/game-root/Guacamelee.exe", "w").write("MZ")
+    open(f"{tmp}/games/Guacamelee/start.n.sh", "w").write("#!/bin/sh\n")
+    os.chmod(f"{tmp}/games/Guacamelee/start.n.sh", 0o755)
     json.dump({"games": [{"app_name": "abc", "title": "Vampire Crawler", "runner": "sideload",
                           "install": {"executable": f"{tmp}/games/vc/start.sh"}}]},
               open(f"{tmp}/.config/heroic/sideload_apps/library.json", "w"))
@@ -524,8 +589,14 @@ def selftest():
     assert "steam:9" not in ids, "Proton is not a game"
     assert ids["heroic:abc"]["launch"] == [f"{tmp}/games/vc/start.sh"], ids["heroic:abc"]
     assert "lutris:lutris-demo" in ids, ids
-    assert not any(g["source"] == "folders" for g in out["games"]), \
-        "the side-loaded executable must not also be listed as a folder game"
+    folders = [g for g in out["games"] if g["source"] == "folders"]
+    assert sorted(g["name"] for g in folders) == ["Guacamelee", "Toys Shop Tidy Up"], folders
+    # realpath: TMPDIR is a symlinked path on this box and the ids are real paths.
+    toy = os.path.realpath(f"{tmp}/games/Toys.Shop.Tidy.Up/game/ToyShopTidyUp.exe")
+    assert ids["file:" + toy]["launch"] == [WINE_RUN, toy], folders
+    guac = os.path.realpath(f"{tmp}/games/Guacamelee/start.n.sh")
+    assert ids["file:" + guac]["launch"] == [guac], \
+        "the native starter wins over the .exe deeper in the same repack"
     assert out["counts"]["shortcuts"] == 1, "the entry without an appid is not launchable"
     assert ids["shortcut:987654"]["name"] == "Tiny Bubbles", ids["shortcut:987654"]
     assert ids["shortcut:987654"]["launch"] == ["xdg-open", "steam://rungameid/987654"]

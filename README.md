@@ -78,7 +78,18 @@ the panel).
 | **Lutris** | `~/.config/lutris/games/*.yml` | `lutris:rungame/<slug>` |
 | **Heroic** | side-loaded apps, Epic (`legendary`) and GOG libraries under `~/.config/heroic/` | the game's own executable, otherwise `heroic://launch/<runner>/<app_name>` |
 | **Desktop** | `.desktop` entries with `Categories=Game` in `~/.local/share/applications`, `/usr/share/applications` and the Flatpak exports. Entries that are a front end for another library (Steam, Lutris, Heroic, Moonlight, Bottles, itch, RetroArch, Prism) are left to the source that owns their games | `gio launch <entry>` |
-| **Folders** | one starter per folder: the native starter if there is one, then an AppImage, then the Wine starter; helper scripts and installers are skipped | the executable itself |
+| **Folders** | one starter per folder: the native starter if there is one, then an AppImage, then a bare `.exe` through Wine; helper scripts, installers and crash handlers are skipped | the executable itself, an `.exe` through `bin/game-wine.sh` |
+
+A folder whose only playable thing is a Windows `.exe` (a repack with `game/Game.exe`
+and nothing else) becomes a normal row, started through Wine in a **prefix of its
+own** under `~/.local/share/gameshelf/wine/<folder>-<hash>`. One prefix per game
+means a `winetricks` tweak or a 32-bit title in one prefix cannot break the next,
+nothing is written into the game folder, and deleting the prefix is the whole
+uninstall. Point `GAMESHELF_WINE_DIR` somewhere else to move them.
+
+A game that needs a real Proton (DXVK/DLSS, anti-cheat, an installer) still
+belongs in Steam — add it there as a non-Steam game, which is what the `Steam
+shortcuts` source above is for.
 
 Steam, Lutris and Heroic each register a URI handler on a normal install, so
 everything GameShelf does not own is started through `xdg-open`. One code path,
@@ -103,14 +114,25 @@ python3 scan-games.py --selftest   # builds a fixture tree: every source must fi
   launcher ships its own `.desktop` handler).
 - The launchers themselves. GameShelf never calls Steam's, Lutris' or Heroic's
   APIs and never writes into their libraries — it only reads their manifest files.
+- `wine` and `md5sum` — needed only for a `Folders` row that is a bare `.exe`.
+  Nothing else uses them.
 
 ## Known limits
 
 - **One row per folder.** A repack shipping both `start.n.sh` and `start.e-w.sh`
   shows once, native preferred. A per-folder override is the fix if that ever
   guesses wrong.
-- **`.exe` files are skipped.** A bare Windows executable needs a Wine prefix,
-  which is Lutris' and Heroic's job, not a launcher's.
+- **`.exe` rows are Wine, warts and all.** The system `wine` with its wine-mono
+  and wine-gecko, no DXVK: enough for the small Unity/GameMaker repacks this
+  source finds, wrong for a game that wants real Proton (add that one to Steam
+  instead) and untuned for a game with its own `winetricks` recipe. The prefix is
+  per game but nobody tunes it for you.
+- **A modern Unreal title is exactly the case Wine alone does not cover.**
+  Measured on an Unreal Engine 5.6 repack: Wine 11 + `vcrun2022` in the game's own
+  prefix reached the main menu and the menu drew, while the 3D viewport stayed
+  white — wined3d is not what UE5.6's renderer targets. Anything UE5-shaped
+  belongs in Steam as a non-Steam game, where Proton brings DXVK. The `.exe` row
+  is still the right row to *find* it with.
 - **Epic and GOG libraries are read defensively** — neither was installed when
   this was written, so those branches are unverified until they hold a game.
 - **A shortcut without an appid is skipped.** Steam writes one for every entry it
@@ -119,7 +141,9 @@ python3 scan-games.py --selftest   # builds a fixture tree: every source must fi
 - **A `.desktop` entry that only runs `steam://rungameid/...` is not listed
   twice** — the Steam source already has it.
 - Folder titles come from the directory name, so a folder called
-  `Project.Zomboid-jc141` shows up as "Project Zomboid jc141".
+  `Project.Zomboid-jc141` shows up as "Project Zomboid jc141" — except when the
+  game sits in a container a repack made (`game/`, `files/win64/`), where the
+  name is taken from the folder above it rather than from `game`.
 
 ## License
 

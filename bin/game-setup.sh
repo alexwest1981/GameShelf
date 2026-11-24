@@ -101,6 +101,20 @@ install() {
         say "$title is ready"
         return 0
     fi
+    # A game whose installer (or the game itself) wants a runtime: name the
+    # winetricks verbs in GAMESHELF_VERBS and they land in this same prefix
+    # before the installer runs — unquoted on purpose, verbs are space-separated.
+    if [ -n "${GAMESHELF_VERBS:-}" ]; then
+        write_state running install "$title" "prefix=$prefix"
+        say "Preparing $title…"
+        # shellcheck disable=SC2086
+        if ! "$WINE_RUN" --proton --setup --in "$prefix" "$archive" $GAMESHELF_VERBS >/dev/null 2>&1; then
+            write_state failed install "$title" "prefix=$prefix" \
+                "error=could not add $GAMESHELF_VERBS to the prefix"
+            say "Could not prepare $title"
+            exit 1
+        fi
+    fi
     # Inno Setup writes a real log here; an installer that does not know /LOG
     # ignores the argument.
     inno_log="$STATE_DIR/$(basename "$state_file" .state)-install.log"
@@ -207,14 +221,24 @@ PY
     : > "$tmp/adopt/drive_c/Games/Adopted/game/AdoptedGame.exe"
     : > "$tmp/inst/Setup.exe"
     cp "$(readlink -f "$0")" "$tmp/fake/bin/game-setup.sh"
-    printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = --prefix ] && echo "$FAKE_PREFIX"; done\nexit 0\n' > "$tmp/fake/bin/game-wine.sh"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$FAKE_CALLS"\nfor a in "$@"; do [ "$a" = --prefix ] && echo "$FAKE_PREFIX"; done\nexit 0\n' > "$tmp/fake/bin/game-wine.sh"
     chmod +x "$tmp/fake/bin/game-wine.sh"
-    GAMESHELF_STATE_DIR="$tmp/state-adopt" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/adopt" \
+    GAMESHELF_STATE_DIR="$tmp/state-adopt" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/adopt" FAKE_CALLS="$tmp/calls" \
         sh "$tmp/fake/bin/game-setup.sh" install "$tmp/inst/Setup.exe"
     adopt_state=$(ls "$tmp/state-adopt"/*.state)
     grep -qx 'state=ready' "$adopt_state" || { echo "selftest FAILED: adopt did not end ready"; exit 1; }
     grep -q 'AdoptedGame.exe' "$adopt_state" || { echo "selftest FAILED: adopt lost the game"; exit 1; }
-    echo "selftest ok: unpack, state, trash, candidates, adopt"
+
+    # GAMESHELF_VERBS puts the runtime into the same prefix before the installer,
+    # so the prefix is prepared with --setup in Proton mode.
+    mkdir -p "$tmp/empty/drive_c/Games" "$tmp/inst2"
+    : > "$tmp/inst2/Setup.exe"
+    GAMESHELF_STATE_DIR="$tmp/state-verbs" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/empty" FAKE_CALLS="$tmp/calls" \
+        GAMESHELF_VERBS="dotnet48 vcrun2022" sh "$tmp/fake/bin/game-setup.sh" install "$tmp/inst2/Setup.exe" \
+        || true   # no game in the prefix, so it ends failed on purpose
+    grep -q -- '--proton --setup --in .* dotnet48 vcrun2022' "$tmp/calls" \
+        || { echo "selftest FAILED: GAMESHELF_VERBS never reached --setup"; exit 1; }
+    echo "selftest ok: unpack, state, trash, candidates, adopt, verbs"
 }
 
 mode=${1:-}

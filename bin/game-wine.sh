@@ -53,8 +53,16 @@ if [ "$mode" = selftest ]; then
     # A prefix handed in wins over the computed one (a game an installer made).
     p2=$(GAMESHELF_WINE_DIR="$tmp/wine" "$0" --in "$tmp/explicit" --prefix "$tmp/dir/Game.exe")
     [ "$p2" = "$tmp/explicit" ] || ok=""
+    # --setup on a Proton prefix must land in $data/pfx (and use system wine:
+    # Proton's own wine cannot run the .NET installer, measured).
+    mkdir -p "$tmp/stub"
+    printf '#!/bin/sh\necho "$WINEPREFIX|$WINE"\n' > "$tmp/stub/winetricks"
+    chmod +x "$tmp/stub/winetricks"
+    setup_out=$(PATH="$tmp/stub:$PATH" GAMESHELF_PROTON="$tmp/build" \
+        "$0" --proton --setup --in "$tmp/pdata" "$tmp/dir/Game.exe" dotnet48 2>&1)
+    [ "$setup_out" = "$tmp/pdata/pfx|" ] || ok=""
     if [ -n "$ok" ] && [ -d "$(dirname "$p")" ]; then
-        echo "selftest ok: $p | --in $p2"
+        echo "selftest ok: $p | --in $p2 | --setup $setup_out"
     else
         echo "selftest FAILED: prefix resolution is wrong (got '$p' / '$p2')" >&2
         rm -rf "$tmp"
@@ -92,6 +100,21 @@ fi
 # silent no-launch ("wine: chdir to <prefix>: No such file or directory").
 mkdir -p "$(dirname "$data")" "$data"
 
+proton_build() {  # the build --proton would run, or nothing
+    if [ -n "${GAMESHELF_PROTON:-}" ]; then
+        printf '%s\n' "$GAMESHELF_PROTON"
+        return 0
+    fi
+    # Name order puts "Proton - Experimental" before "Proton 9.0"; any
+    # installed build will do, so pin one with GAMESHELF_PROTON only if the
+    # pick is ever wrong.
+    for candidate in "$HOME/.local/share/Steam/steamapps/common/Proton"* \
+                     "$HOME/.steam/steam/steamapps/common/Proton"*; do
+        [ -x "$candidate/proton" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    return 1
+}
+
 if [ "$mode" = prefix ]; then
     printf '%s\n' "$data"
     exit 0
@@ -99,8 +122,19 @@ fi
 
 if [ "$mode" = setup ]; then
     command -v winetricks >/dev/null 2>&1 || { echo "game-wine.sh: winetricks is not installed" >&2; exit 1; }
-    export WINEPREFIX=$data
-    [ -d "$WINEPREFIX" ] || wineboot -i >/dev/null 2>&1 || true   # a fresh prefix first
+    if [ "$proton" = 1 ]; then
+        # Proton keeps its prefix in $data/pfx. Proton's own wine cannot run the
+        # .NET installer (measured: dotNetFx40 ends status 67, no v4 key at all,
+        # mscoree=d changes nothing); system wine installs into the same prefix
+        # and Proton reads the result (Release 528049). The game still starts
+        # under Proton, so DXVK is intact.
+        # shortcut: two 11.x wines share one prefix; if a verb ever half-applies,
+        # use a bare-Wine prefix (no --proton) for that game instead.
+        export WINEPREFIX="$data/pfx"
+    else
+        export WINEPREFIX=$data
+        [ -d "$WINEPREFIX" ] || wineboot -i >/dev/null 2>&1 || true   # a fresh prefix first
+    fi
     exec winetricks -q "$@"
 fi
 
@@ -110,17 +144,7 @@ export WINEDEBUG="${WINEDEBUG:--all}"
 cd "$dir"
 
 if [ "$proton" = 1 ]; then
-    build=${GAMESHELF_PROTON:-}
-    if [ -z "$build" ]; then
-        # Name order puts "Proton - Experimental" before "Proton 9.0"; any
-        # installed build will do, so pin one with GAMESHELF_PROTON only if the
-        # pick is ever wrong.
-        for candidate in "$HOME/.local/share/Steam/steamapps/common/Proton"* \
-                         "$HOME/.steam/steam/steamapps/common/Proton"*; do
-            [ -x "$candidate/proton" ] && { build=$candidate; break; }
-        done
-    fi
-    if [ -n "$build" ] && [ -x "$build/proton" ]; then
+    if build=$(proton_build) && [ -x "$build/proton" ]; then
         export STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
         export STEAM_COMPAT_DATA_PATH=$data
         exec "$build/proton" run "$exe" "$@"

@@ -596,6 +596,14 @@ def human_size(n):
     return "%d TB" % n
 
 
+def failure_status(state, what):
+    """'Install failed: <what the installer wrote>' when it said anything."""
+    error = (state.get("error") or "").strip()
+    if error:
+        return what + " failed: " + error[:90]
+    return what + " failed — press " + what + " to retry"
+
+
 def clean_title(name):
     """'Borderlands.4.v1.11.REPACK-KaOs' -> 'Borderlands 4'. A scene tag or a
     version is not part of the title, and 'Install Borderlands.4.v1.11.REPACK-KaOs'
@@ -657,7 +665,7 @@ def scan_folders(opts, hidden, known_dirs, states, cache):
                 row["status"] = "Unpacking…"
             elif state.get("state") == "failed":
                 row["state"] = "failed"
-                row["status"] = "Unpack failed — press Unpack to retry"
+                row["status"] = failure_status(state, "Unpack")
             elif state.get("state") == "ready":
                 starter = first_game(state.get("dest") or "")
                 row["action"] = "Remove archive"
@@ -710,7 +718,7 @@ def scan_folders(opts, hidden, known_dirs, states, cache):
                     }
                     if state.get("state") == "failed":
                         row["state"] = "failed"
-                        row["status"] = "Install failed — press Install to retry"
+                        row["status"] = failure_status(state, "Install")
                     games.append(row)
                 continue
             if os.path.dirname(real) in known_dirs:
@@ -939,6 +947,11 @@ def selftest():
     open(f"{dl}/Borderlands.4.v1.11.REPACK-KaOs/Install.exe", "w").write("MZ")
     state_of(f"{dl}/Borderlands.4.v1.11.REPACK-KaOs/Install.exe", "state=ready", "kind=install",
              f"prefix={tmp}/pfx", f"game={tmp}/pfx/drive_c/Games/Borderlands/game/Borderlands4.exe")
+    # A failed install has to say what the installer wrote, not just "failed".
+    os.makedirs(f"{dl}/Broken.Game")
+    open(f"{dl}/Broken.Game/setup.exe", "w").write("MZ")
+    state_of(f"{dl}/Broken.Game/setup.exe", "state=failed", "kind=install",
+             f"prefix={tmp}/pfx2", "error=Setup needs .NET Framework 4.8")
 
     # The scan never lists an archive itself — that would hold the panel for a
     # minute on a cold 16 GB rar — it only reports how many are unanswered.
@@ -968,6 +981,8 @@ def selftest():
     assert town["launch"] == [] and town["action"] == "Unpack", town
     fit = ids3["file:" + os.path.realpath(f"{dl}/Teardown [FitGirl Repack]/Setup.exe")]
     assert fit["action"] == "Install Teardown" and fit["name"] == "Teardown", fit
+    broken = ids3["file:" + os.path.realpath(f"{dl}/Broken.Game/setup.exe")]
+    assert broken["state"] == "failed" and ".NET Framework" in broken["status"], broken
     border = ids3["file:" + os.path.realpath(f"{tmp}/pfx/drive_c/Games/Borderlands/game/Borderlands4.exe")]
     assert border["name"] == "Borderlands 4", border
     assert border["launch"] == [WINE_RUN, "--proton", "--in", os.path.realpath(f"{tmp}/pfx"),

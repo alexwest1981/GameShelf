@@ -30,6 +30,10 @@ Item {
   property int pendingClassify: 0
   property bool classifyRunning: false
   property bool classifyTried: false
+  // Rows with no picture of their own: one out-of-band pass asks Steam, so a
+  // panel open never waits on the network.
+  property int pendingCovers: 0
+  property bool coversTried: false
   // The row whose Remove archive was pressed, waiting for trash-or-delete.
   property var removeTarget: null
 
@@ -104,6 +108,7 @@ Item {
   function open(payloadJson) {
     opened = true
     classifyTried = false
+    coversTried = false
     removeTarget = null
     var opts = defaultOptions()
     try {
@@ -138,6 +143,12 @@ Item {
         root.classifyRunning = true
         classifyProc.command = ["python3", root.helper, "--classify", root.optionsJson]
         classifyProc.running = true
+      }
+      root.pendingCovers = data.pendingCovers || 0
+      if (root.pendingCovers > 0 && !root.coversTried) {
+        root.coversTried = true
+        coversProc.command = ["python3", root.helper, "--covers", root.optionsJson]
+        coversProc.running = true
       }
     } catch (e) {
       root.scanError = "scan produced no JSON"
@@ -281,6 +292,16 @@ Item {
     running: false
     onExited: function(exitCode) {
       root.classifyRunning = false
+      root.rescan()
+    }
+  }
+
+  // The one-off pass that fetches covers for folder rows; a miss is remembered,
+  // so the next open asks nothing.
+  Process {
+    id: coversProc
+    running: false
+    onExited: function(exitCode) {
       root.rescan()
     }
   }

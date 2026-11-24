@@ -800,6 +800,129 @@ def scan_folders(opts, hidden, known_dirs, states, cache):
 
 # ── Assembly ─────────────────────────────────────────────────────────────────
 
+# ── Covers for rows that came from a folder ─────────────────────────────────
+#
+# A repack on disk carries no picture, so the name is looked up once in Steam's
+# store search (no API key) and its header art is cached. Nothing is guessed: a
+# name that does not match exactly gets no cover rather than the wrong one, and
+# a miss is remembered so it is never asked again.
+
+STEAM_SEARCH = "https://store.steampowered.com/api/storesearch/?cc=se&l=en&term="
+STEAM_DETAILS = "https://store.steampowered.com/api/appdetails?l=en&appids="
+COVER_TIMEOUT = 15
+
+
+def cover_key(name):
+    """'Tidy.Up.the.Royal.Armory.v1.2' and 'Tidy Up the Royal Armory' are one.
+
+    A colon becomes a space, so runs of spaces are collapsed too — otherwise
+    'ReStory …' and 'Restory: …' would never meet.
+    """
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", clean_title(name).lower()).split())
+
+
+def cover_cache(opts):
+    path = os.path.join(os.path.dirname(state_dir(opts)), "covers.json")
+    try:
+        return path, json.load(open(path))
+    except (OSError, ValueError):
+        return path, {}
+
+
+def match_cover(items, query):
+    """The appid whose name is this game, or None.
+
+    Exact after normalising, else the shortest result the query prefixes — Steam
+    puts an artbook or a DLC above the game itself ('ReStory … - Digital
+    Artbook' before 'ReStory …').
+    """
+    want = cover_key(query)
+    if not want:
+        return None
+    exact, prefixed = [], []
+    for item in items or []:
+        got = cover_key(str(item.get("name") or ""))
+        if not got or not item.get("id"):
+            continue
+        if got == want:
+            exact.append(item)
+        elif got.startswith(want + " ") or want.startswith(got + " "):
+            prefixed.append(item)
+    for bucket in (exact, sorted(prefixed, key=lambda i: len(str(i.get("name"))))):
+        if bucket:
+            return str(bucket[0]["id"])
+    return None
+
+
+def http_json(url, timeout=COVER_TIMEOUT):
+    try:
+        import urllib.request
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:
+        return None
+
+
+def http_file(url, dest, timeout=COVER_TIMEOUT):
+    try:
+        import urllib.request
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            data = r.read()
+        if len(data) < 1024:          # a placeholder or an error page
+            return False
+        tmp = dest + ".part"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, dest)
+        return True
+    except Exception:
+        return False
+
+
+def fetch_cover(name, cache_dir):
+    """Download one cover. Returns a cache entry: {file} or {miss}."""
+    found = http_json(STEAM_SEARCH + urllib_quote(name))
+    appid = match_cover((found or {}).get("items"), name)
+    if not appid:
+        return {"miss": 1}
+    detail = http_json(STEAM_DETAILS + appid)
+    data = ((detail or {}).get(appid) or {}).get("data") or {}
+    url = data.get("header_image") or ""
+    if not url:
+        return {"miss": 1}
+    dest = os.path.join(cache_dir, hashlib.md5(cover_key(name).encode()).hexdigest() + ".jpg")
+    if not http_file(url, dest):
+        return {"miss": 1}
+    return {"appid": appid, "name": data.get("name") or name, "file": dest}
+
+
+def urllib_quote(text):
+    import urllib.parse
+    return urllib.parse.quote(text)
+
+
+def covers_pass(opts):
+    """Answer every row that has no picture. Runs out of band, one at a time."""
+    if os.environ.get("GAMESHELF_COVERS") == "0":
+        return 0
+    path, cache = cover_cache(opts)
+    cache_dir = os.path.join(os.path.dirname(path), "covers")
+    games = scan(opts)["games"]
+    done = 0
+    for game in games:
+        if game.get("iconFile") or game.get("iconName") or game.get("state"):
+            continue                       # it has art, or it is a download row
+        key = cover_key(game.get("name") or "")
+        if not key or key in cache:
+            continue
+        os.makedirs(cache_dir, exist_ok=True)
+        cache[key] = fetch_cover(game.get("name") or "", cache_dir)
+        save_cache(path, cache)            # one at a time: a kill keeps the rest
+        done += 1
+        time.sleep(0.2)                    # be a good guest at Valve's door
+    return done
+
+
 def scan(opts):
     home = home_of(opts)
     sources = opts.get("sources") or list(SOURCE_LABELS)
@@ -848,12 +971,23 @@ def scan(opts):
 
     for g in games:
         g.setdefault("detail", "")
+    covers_on = os.environ.get("GAMESHELF_COVERS") != "0"
+    _, covers = cover_cache(opts) if covers_on else (None, {})
+    missing = set()
+    for g in games:
+        if g.get("iconFile") or g.get("iconName") or g.get("state"):
+            continue
+        entry = covers.get(cover_key(g.get("name") or "")) or {}
+        if entry.get("file") and os.path.exists(entry["file"]):
+            g["iconFile"] = entry["file"]
+        elif covers_on:
+            missing.add(cover_key(g.get("name") or ""))
     games.sort(key=lambda g: (g["source"], str(g["name"]).lower()))
     counts = {}
     for g in games:
         counts[g["source"]] = counts.get(g["source"], 0) + 1
     return {"games": games, "counts": counts, "errors": errors,
-            "pendingClassification": pending_archives}
+            "pendingClassification": pending_archives, "pendingCovers": len(missing)}
 
 
 # ── Self-check ───────────────────────────────────────────────────────────────
@@ -1028,6 +1162,23 @@ def selftest():
 
     out3 = scan(opts3)
     assert out3["pendingClassification"] == 0, out3["pendingClassification"]
+
+    # A cover the pass cached lands on the folder row; the lookup itself is
+    # conservative, so an artbook above the game never becomes its picture.
+    cover = f"{tmp}/covers/toys.jpg"
+    os.makedirs(f"{tmp}/covers", exist_ok=True)
+    open(cover, "wb").write(b"\xff\xd8" + b"0" * 4096)
+    toys = next(g for g in out3["games"]
+                if g["source"] == "folders" and not g.get("state"))
+    json.dump({cover_key(toys["name"]): {"appid": "1", "file": cover}},
+              open(f"{tmp}/covers.json", "w"))
+    covered = {g["id"]: g for g in scan(opts3)["games"]}
+    assert covered[toys["id"]].get("iconFile") == cover, covered[toys["id"]]
+    assert match_cover([{"id": "5034500", "name": "Restory: Chill Electronics Repairs - Digital Artbook"},
+                        {"id": "3812600", "name": "ReStory: Chill Electronics Repairs"}],
+                       "ReStory Chill Electronics Repairs") == "3812600"
+    assert match_cover([{"id": "1", "name": "Tale Sweeper"}], "Tidy Up") is None
+
     ids3 = {g["id"]: g for g in out3["games"]}
     fresh = ids3["file:" + os.path.realpath(f"{dl}/Fresh.Game.zip")]
     assert fresh["action"] == "Unpack" and fresh["name"] == "Fresh Game", fresh
@@ -1085,6 +1236,11 @@ def main():
                 pass
     # --classify: the background pass that lists the archives once, so a panel
     # open never waits for a 16 GB rar.
+    # --covers: the out-of-band pass that finds pictures for rows that came from
+    # a folder, so a panel open never waits for Steam.
+    if "--covers" in sys.argv:
+        covers_pass(opts)
+        return
     if "--classify" in sys.argv:
         classify_archives(opts)
         return

@@ -32,7 +32,10 @@ bash install.sh --no-enable  # same, but leave it out of the bar
 ```
 
 The repository owns the sources; the plugin folder is a build artifact, so run
-`install.sh` again after `git pull`. Nothing needs root.
+`install.sh` again after `git pull`. A changed `Panel.qml` needs
+`omarchy restart shell`: the shell reloads the bar widget on a file change but
+keeps a panel it has already created, which shows up as a panel with the old
+buttons and the new data. Nothing needs root.
 
 ## Remove
 

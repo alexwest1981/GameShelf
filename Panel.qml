@@ -469,6 +469,30 @@ Item {
                 anchors.rightMargin: Style.space(10)
                 spacing: Style.space(10)
 
+                Item {
+                  id: iconSlot
+                  // A game that knows its own picture shows it; a row that does
+                  // not is unchanged, so nothing shifts for downloads.
+                  readonly property var g: delegateRoot.game
+                  visible: !!g && !!(g.iconFile || g.iconName)
+                  Layout.preferredWidth: Style.space(22)
+                  Layout.preferredHeight: Style.space(22)
+                  Image {
+                    anchors.fill: parent
+                    source: {
+                      if (!iconSlot.g) return ""
+                      if (iconSlot.g.iconFile) return "file://" + iconSlot.g.iconFile
+                      if (iconSlot.g.iconName) return Quickshell.iconPath(iconSlot.g.iconName, true)
+                      return ""
+                    }
+                    // Square crop: a square app icon is unaffected, and Steam's
+                    // portrait art loses its edges instead of its middle.
+                    fillMode: Image.PreserveAspectCrop
+                    asynchronous: true
+                    cache: true
+                  }
+                }
+
                 ColumnLayout {
                   Layout.fillWidth: true
                   spacing: 1

@@ -126,6 +126,17 @@ def steam_libraries(home):
     return libs
 
 
+def steam_icon(home, appid):
+    """Steam's own art for an appid: the portrait capsule first (a square crop of
+    it reads like an app icon), then the wide header. Nothing is downloaded."""
+    for client in (f"{home}/.local/share/Steam", f"{home}/.steam/steam"):
+        for name in ("library_600x900.jpg", "header.jpg"):
+            path = f"{client}/appcache/librarycache/{appid}/{name}"
+            if os.path.exists(path):
+                return path
+    return ""
+
+
 def scan_steam(home, hidden):
     games, seen = [], set()
     for lib in sorted(steam_libraries(home)):
@@ -145,13 +156,17 @@ def scan_steam(home, hidden):
             gid = f"steam:{appid.group(1)}"
             if gid in hidden:
                 continue
-            games.append({
+            entry = {
                 "id": gid,
                 "name": name,
                 "source": "steam",
                 "detail": f"appid {appid.group(1)}",
                 "launch": ["xdg-open", f"steam://rungameid/{appid.group(1)}"],
-            })
+            }
+            icon = steam_icon(home, appid.group(1))
+            if icon:
+                entry["iconFile"] = icon
+            games.append(entry)
     return games
 
 
@@ -278,14 +293,21 @@ def scan_desktop(opts, hidden):
             if gid in hidden:
                 continue
             binary = os.path.basename(command.group(1).split()[0])
-            games.append({
+            entry = {
                 "id": gid,
                 "name": name.group(1).strip(),
                 "source": "desktop",
                 "detail": binary,
                 # gio launches by file path and handles Flatpak exports alike.
                 "launch": ["gio", "launch", path],
-            })
+            }
+            # The entry's own Icon= is either a path or a theme name; the panel
+            # resolves the name itself.
+            icon = re.search(r"^Icon=(.+)$", text, re.M)
+            if icon:
+                icon = icon.group(1).strip()
+                entry["iconFile" if icon.startswith("/") else "iconName"] = icon
+            games.append(entry)
     return games
 
 
@@ -900,7 +922,8 @@ def selftest():
             f"[Desktop Entry]\nType=Application\nName={name}\nExec={command}\n"
             f"Categories=Game;\n{extra}")
 
-    desktop("tiny-game", "Tiny Desktop Game", "tiny-game --play")
+    desktop("tiny-game", "Tiny Desktop Game", "tiny-game --play", extra="Icon=/usr/share/pixmaps/tiny.png\n")
+    desktop("pic-game", "Pic Game", "pic-game", extra="Icon=pic-game\n")
     desktop("steam", "Steam", "/usr/bin/steam %U")
     desktop("net.lutris.Lutris", "Lutris", "lutris %U")
     desktop("valheim", "Valheim", "steam steam://rungameid/892970")
@@ -909,6 +932,11 @@ def selftest():
     out = scan({"home": tmp, "sources": ["steam", "shortcuts", "lutris", "heroic", "desktop", "folders"],
                 "folders": [f"{tmp}/games"], "desktopDirs": [apps]})
     ids = {g["id"]: g for g in out["games"]}
+    # An entry's own Icon= is a path or a theme name, and nothing else gets one.
+    assert ids["desktop:tiny-game"].get("iconFile") == "/usr/share/pixmaps/tiny.png", \
+        ids["desktop:tiny-game"]
+    assert ids["desktop:pic-game"].get("iconName") == "pic-game", ids["desktop:pic-game"]
+    assert "desktop:nodisplay" not in ids, "a NoDisplay entry is never a row"
     assert "steam:123" in ids, ids
     assert "steam:9" not in ids, "Proton is not a game"
     assert ids["heroic:abc"]["launch"] == [f"{tmp}/games/vc/start.sh"], ids["heroic:abc"]

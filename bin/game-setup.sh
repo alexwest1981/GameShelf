@@ -3,6 +3,7 @@
 #
 #   game-setup.sh unpack  <archive>              .rar/.zip/.7z -> ~/Games
 #   game-setup.sh install <installer.exe>        Proton (or wine) in a prefix of its own
+#   game-setup.sh install --verbs dotnet48 <installer.exe>   same, with .NET first
 #   game-setup.sh remove  <archive> --trash|--delete
 #   game-setup.sh --selftest
 #
@@ -85,6 +86,8 @@ find_games() {  # find_games <prefix dir>: likely game executables, biggest firs
     find "$1" -maxdepth 7 -type f -iname '*.exe' 2>/dev/null \
         | grep -viE '/(windows|windows\.old|ProgramData|users/[^/]+/(AppData|Desktop|Documents|Downloads|Saved Games))' \
         | grep -viE 'unins|redist|vcrun|dxsetup|dxwebsetup|oalinst|dotnet|crashhandler|crashreport|errorreport|updater|notification_helper|steamclient_loader|install|setup' \
+        | grep -viE '/(Steam|Internet Explorer|Windows Media Player|Common Files)/' \
+        | grep -viE '/(steam|steamwebhelper|gameoverlayui|iexplore|wmplayer|wineboot|explorer|cmd|regedit|notepad|wordpad|winhlp32)\.exe$' \
         | while IFS= read -r exe; do printf '%s\t%s\n' "$(stat -c %s "$exe")" "$exe"; done \
         | sort -rn | head -3 | cut -f2-
 }
@@ -130,7 +133,11 @@ install() {
     if [ -z "$games" ]; then
         error=$(log_tail "$inno_log")
         [ -n "$error" ] || error="installer exited $rc and left no game in the prefix"
-        write_state failed install "$title" "prefix=$prefix" "error=$error"
+        if needs=$(log_hint "$inno_log") && [ -n "$needs" ]; then
+            write_state failed install "$title" "prefix=$prefix" "error=$error" "needs=$needs"
+        else
+            write_state failed install "$title" "prefix=$prefix" "error=$error"
+        fi
         say "Installer for $title failed"
         exit 1
     fi
@@ -151,6 +158,16 @@ write_ready() {
 log_tail() {
     [ -f "$1" ] || return 0
     tr -d '\r' < "$1" | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-160
+}
+
+# What the log says the game is missing, as winetricks verbs — the one thing
+# worth a button on the row. Only the framework is detected: it is what fails
+# here in practice (measured: Wine-Mono is not enough for a repack's setup.exe).
+log_hint() {
+    [ -f "$1" ] || return 0
+    if tr -d '\r' < "$1" | grep -qiE '\.net framework|dotnet|clr error|netfx'; then
+        printf '%s\n' dotnet48
+    fi
 }
 
 remove() {
@@ -206,11 +223,16 @@ PY
     [ ! -e "$archive" ] || { echo "selftest FAILED: --delete left the archive"; exit 1; }
     [ ! -e "$state_file" ] || { echo "selftest FAILED: --delete left the state file"; exit 1; }
 
-    # Candidate search: only the game, not the uninstaller or Windows' own exes.
-    mkdir -p "$tmp/pfx/drive_c/Games/Shelf/game" "$tmp/pfx/drive_c/windows/system32"
+    # Candidate search: only the game, not the uninstaller or Windows' own exes —
+    # and not the plumbing Proton puts in every prefix (measured: a fresh prefix
+    # holds Program Files (x86)/Steam/steam.exe, and that was offered as the game).
+    mkdir -p "$tmp/pfx/drive_c/Games/Shelf/game" "$tmp/pfx/drive_c/windows/system32" \
+             "$tmp/pfx/drive_c/Program Files (x86)/Steam" "$tmp/pfx/drive_c/Program Files/Internet Explorer"
     : > "$tmp/pfx/drive_c/Games/Shelf/game/Shelf.exe"
     : > "$tmp/pfx/drive_c/Games/Shelf/unins000.exe"
     : > "$tmp/pfx/drive_c/windows/system32/edit.exe"
+    : > "$tmp/pfx/drive_c/Program Files (x86)/Steam/steam.exe"
+    : > "$tmp/pfx/drive_c/Program Files/Internet Explorer/iexplore.exe"
     found=$(find_games "$tmp/pfx")
     [ "$found" = "$tmp/pfx/drive_c/Games/Shelf/game/Shelf.exe" ] \
         || { echo "selftest FAILED: candidate search found '$found'"; exit 1; }
@@ -238,15 +260,38 @@ PY
         || true   # no game in the prefix, so it ends failed on purpose
     grep -q -- '--proton --setup --in .* dotnet48 vcrun2022' "$tmp/calls" \
         || { echo "selftest FAILED: GAMESHELF_VERBS never reached --setup"; exit 1; }
+
+    # The panel sends the verbs as argv, and a log that names the framework makes
+    # the failure carry needs=dotnet48 — that is what the row's button reads.
+    mkdir -p "$tmp/inst3" "$tmp/state-hint"; : > "$tmp/inst3/Setup.exe"
+    : > "$tmp/calls3"
+    GAMESHELF_STATE_DIR="$tmp/state-hint" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/empty" FAKE_CALLS="$tmp/calls3" \
+        sh "$tmp/fake/bin/game-setup.sh" install --verbs dotnet48 "$tmp/inst3/Setup.exe" || true
+    grep -q -- '--proton --setup --in .* dotnet48$' "$tmp/calls3" \
+        || { echo "selftest FAILED: install --verbs did not reach --setup"; exit 1; }
+    h=$(printf '%s' "$(readlink -f "$tmp/inst3/Setup.exe")" | md5sum | cut -c1-16)
+    printf 'Setup requires .NET Framework 4.8 or later\n' > "$tmp/state-hint/$h-install.log"
+    GAMESHELF_STATE_DIR="$tmp/state-hint" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/empty" FAKE_CALLS="$tmp/calls3" \
+        sh "$tmp/fake/bin/game-setup.sh" install "$tmp/inst3/Setup.exe" || true
+    grep -qx 'needs=dotnet48' "$tmp/state-hint/$h.state" \
+        || { echo "selftest FAILED: a .NET log did not mark the state"; exit 1; }
     echo "selftest ok: unpack, state, trash, candidates, adopt, verbs"
 }
 
 mode=${1:-}
 case "$mode" in
     unpack|install|remove|--selftest) ;;
-    *) sed -n '2,8p' "$0" >&2; exit 2 ;;
+    *) sed -n '2,9p' "$0" >&2; exit 2 ;;
 esac
 [ "$mode" = --selftest ] && { selftest; exit 0; }
+
+# install may name the runtime the prefix needs, as argv so the panel can send
+# it: install --verbs dotnet48 <installer>.
+if [ "$mode" = install ] && [ "${2:-}" = --verbs ]; then
+    GAMESHELF_VERBS="${3:-}"
+    set -- "$mode" "${4:-}"     # mode stays at $1, the installer at $2
+fi
+export GAMESHELF_VERBS="${GAMESHELF_VERBS:-}"
 
 archive=$(readlink -f "${2:-.}" 2>/dev/null) || archive=
 [ -e "$archive" ] || { echo "game-setup.sh: no such file: ${2:-}" >&2; exit 1; }

@@ -123,6 +123,13 @@ fi
 if [ "$mode" = setup ]; then
     command -v winetricks >/dev/null 2>&1 || { echo "game-wine.sh: winetricks is not installed" >&2; exit 1; }
     if [ "$proton" = 1 ]; then
+        # Let Proton create its own prefix first: a Wine-made prefix in Proton's
+        # slot works, but Proton then has to adopt it, and the button path would
+        # hit exactly that on a fresh game.
+        if [ ! -d "$data/pfx" ] && build=$(proton_build) && [ -x "$build/proton" ]; then
+            STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}" \
+            STEAM_COMPAT_DATA_PATH="$data" "$build/proton" run wineboot.exe >/dev/null 2>&1 || true
+        fi
         # Proton keeps its prefix in $data/pfx. Proton's own wine cannot run the
         # .NET installer (measured: dotNetFx40 ends status 67, no v4 key at all,
         # mscoree=d changes nothing); system wine installs into the same prefix

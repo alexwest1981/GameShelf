@@ -126,10 +126,15 @@ install() {
     # Inno Setup writes a real log here; an installer that does not know /LOG
     # ignores the argument.
     inno_log="$STATE_DIR/$(basename "$state_file" .state)-install.log"
-    write_state running install "$title" "prefix=$prefix"
+    # A repack's default target is beside the setup file — and that file is on
+    # Z:, so "{sd}\Games" means the root of the filesystem and Inno dies with
+    # "Access denied". Point it inside the prefix instead (measured on FitGirl's
+    # DOOM + DOOM II: /DIR is the difference between failure and a game).
+    win_dir="C:\\Games\\$(printf '%s' "$title" | tr -d '\\/:*?"<>|')"
+    write_state running install "$title" "prefix=$prefix" "dest=$win_dir"
     say "Installing $title…"
     rc=0
-    "$WINE_RUN" --proton --in "$prefix" "$archive" "/LOG=Z:$inno_log" >/dev/null 2>&1 || rc=$?
+    "$WINE_RUN" --proton --in "$prefix" "$archive" "/LOG=Z:$inno_log" "/DIR=$win_dir" >/dev/null 2>&1 || rc=$?
     # The exit code is not the answer: a repack often ends non-zero after a
     # successful extract (its last page starts the game, and that child dies).
     # What counts is whether a game is in the prefix - measured on this box:
@@ -159,10 +164,21 @@ write_ready() {
     mv "$state_file.tmp" "$state_file"
 }
 
-# The last line an installer actually wrote, so a failure can say why.
+# The line an installer actually wrote that explains a failure, so the row says
+# something useful: Inno's "Log closed." is the *last* line and means nothing.
 log_tail() {
     [ -f "$1" ] || return 0
-    tr -d '\r' < "$1" | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-160
+    tr -d '\r' < "$1" \
+        | grep -v '^[[:space:]]*$' \
+        | grep -vE '^-+$' \
+        | grep -viE 'Log (opened|closed)|Deinitializing Setup|Rolling back|Starting the (un)?installation|User chose|Initializing Setup' \
+        | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]+[[:space:]]+//' \
+        | awk 'tolower($0) ~ /unable to|cannot|missing|not found|requires|denied|error [0-9]/ { print; done = 1; exit }
+               want { print; done = 1; exit }
+               tolower($0) ~ /fatal|error/ { want = 1; next }
+               { last = $0 }
+               END { if (!done && last != "") print last }' \
+        | cut -c1-200
 }
 
 # What the log says the game is missing, as winetricks verbs — the one thing
@@ -285,7 +301,18 @@ PY
         FAKE_SETUP_FAIL=1 sh "$tmp/fake/bin/game-setup.sh" install --verbs dotnet48 "$tmp/inst3/Setup.exe" || true
     grep -q 'prefix is busy' "$tmp/state-fail"/*.state \
         || { echo "selftest FAILED: a failed setup step lost its reason"; exit 1; }
-    echo "selftest ok: unpack, state, trash, candidates, adopt, verbs, 2 reasons"
+
+    # What a failed install says: the reason, not Inno's "Log closed." — and a
+    # repack is never told to extract into the root of Z:.
+    printf '2026-11-24 14:54:07.865   Creating directory: Z:\\Games\n2026-11-24 14:54:07.865   Fatal exception during installation process (Exception):\n                          Setup was unable to create the directory "Z:\\Games".\n2026-11-24 14:54:14.628   Log closed.\n' > "$tmp/fitgirl.log"
+    said=$(log_tail "$tmp/fitgirl.log")
+    case "$said" in
+        *"unable to create"*) ;;
+        *) echo "selftest FAILED: log_tail said '$said'"; exit 1 ;;
+    esac
+    grep -q -- '/DIR=C:\\Games' "$tmp/calls3" \
+        || { echo "selftest FAILED: the installer got no /DIR inside the prefix"; exit 1; }
+    echo "selftest ok: unpack, state, trash, candidates, adopt, verbs, 2 reasons, /DIR"
 }
 
 mode=${1:-}

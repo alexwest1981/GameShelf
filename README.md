@@ -132,6 +132,12 @@ touched by either answer.
   which is in the default folder list, so the game keeps showing up after the row
   is removed. An installed game lives inside its prefix under
   `~/.local/share/gameshelf/wine/<name>-<hash>`, and the row carries that path.
+- **A repack is told where to extract.** FitGirl and friends default to a folder
+  beside their own `setup.exe`, and that file is on `Z:` — which is the root of
+  the filesystem in Wine, so the install dies with `Unable to create the
+  directory "Z:\Games". Error 5: Access denied.` Measured on DOOM + DOOM II.
+  GameShelf passes Inno's `/DIR=C:\Games\<title>` instead, i.e. inside the game's
+  own prefix, where it belongs and where the candidate search can find it.
 - **Proton, not bare Wine.** Installers, and the games they leave behind, run
   through the Proton build Steam already has installed — with no Proton they fall
   back to system Wine. That is what makes DXVK-era repacks and installers work, and

@@ -85,15 +85,20 @@ unpack() {
 find_games() {  # find_games <prefix dir>: likely game executables, biggest first
     find "$1" -maxdepth 7 -type f -iname '*.exe' 2>/dev/null \
         | grep -viE '/(windows|windows\.old|ProgramData|users/[^/]+/(AppData|Desktop|Documents|Downloads|Saved Games))' \
-        | grep -viE 'unins|redist|vcrun|dxsetup|dxwebsetup|oalinst|dotnet|crashhandler|crashreport|errorreport|updater|notification_helper|steamclient_loader|install|setup' \
         | grep -viE '/(Steam|Internet Explorer|Windows Media Player|Common Files)/' \
-        | grep -viE '/(steam|steamwebhelper|gameoverlayui|iexplore|wmplayer|wineboot|explorer|cmd|regedit|notepad|wordpad|winhlp32)\.exe$' \
+        | awk -F/ '{ base = tolower($NF)
+                     if (base ~ /(unins|redist|vcrun|dxsetup|dxwebsetup|oalinst|dotnet|crashhandler|crashreport|errorreport|updater|notification_helper|steamclient_loader|quicksfv|install|setup)/) next
+                     if (base ~ /^(steam|steamwebhelper|gameoverlayui|iexplore|wmplayer|wineboot|explorer|cmd|regedit|notepad|wordpad|winhlp32)\.exe$/) next
+                     print }' \
         | while IFS= read -r exe; do printf '%s\t%s\n' "$(stat -c %s "$exe")" "$exe"; done \
         | sort -rn | head -3 | cut -f2-
 }
 
 install() {
-    title=$(basename "$archive"); title=${title%.*}
+    # Name the game after its folder, not after setup.exe: the row says
+    # "Installing DOOM + DOOM II…", and the target folder is readable.
+    title=$(basename "$(dirname "$archive")" | sed 's/ *\[[^]]*\] *//g; s/ *(.*)//g' | sed 's/^ *//; s/ *$//')
+    [ -n "$title" ] || { title=$(basename "$archive"); title=${title%.*}; }
     prefix=$("$WINE_RUN" --proton --prefix "$archive")
     mkdir -p "$STATE_DIR"
     # A prefix that already holds a game — a run that ended non-zero after a

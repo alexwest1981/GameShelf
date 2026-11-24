@@ -24,6 +24,20 @@ Item {
   property bool scanning: false
   property string scanError: ""
 
+  // A scan never lists an archive itself (a cold 16 GB rar would hold the panel
+  // for half a minute). It reports how many downloads are still unclassified,
+  // then one background pass answers them and we rescan.
+  property int pendingClassify: 0
+  property bool classifyRunning: false
+  property bool classifyTried: false
+  // The row whose Remove archive was pressed, waiting for trash-or-delete.
+  property var removeTarget: null
+
+  readonly property bool hasBusy: {
+    for (var i = 0; i < games.length; i++) if (games[i].state === "running") return true
+    return false
+  }
+
   // The folders the scanner walks, as the panel's own list: shown under the
   // game list, added with a folder picker, written back as a bar setting.
   property var foldersList: []
@@ -89,6 +103,8 @@ Item {
 
   function open(payloadJson) {
     opened = true
+    classifyTried = false
+    removeTarget = null
     var opts = defaultOptions()
     try {
       var given = JSON.parse(String(payloadJson || ""))
@@ -114,6 +130,15 @@ Item {
       var data = JSON.parse(String(text).trim())
       root.games = data.games || []
       root.scanError = (data.errors && data.errors.length > 0) ? data.errors.join("; ") : ""
+      root.pendingClassify = data.pendingClassification || 0
+      // One pass per panel open: an archive no tool can read would otherwise
+      // start the pass again on every scan, forever.
+      if (root.pendingClassify > 0 && !root.classifyTried) {
+        root.classifyTried = true
+        root.classifyRunning = true
+        classifyProc.command = ["python3", root.helper, "--classify", root.optionsJson]
+        classifyProc.running = true
+      }
     } catch (e) {
       root.scanError = "scan produced no JSON"
     }
@@ -132,6 +157,31 @@ Item {
     // Detached: Steam/Heroic/Lutris are started through their URI handler, a
     // folder game is its own executable. Nothing here may die with the panel.
     Quickshell.execDetached(game.launch)
+  }
+
+  // The row's own button: Unpack, Install <game>, or Remove archive.
+  function act(game) {
+    if (!game) return
+    if (game.remove) {
+      root.removeTarget = game
+      removeConfirm.visible = true
+      return
+    }
+    if (!game.run || game.run.length === 0) return
+    Quickshell.execDetached(game.run)
+    // The helper writes state=running before it starts working, and the poll
+    // takes over from there.
+    settleTimer.restart()
+  }
+
+  function confirmRemove(mode) {
+    var target = root.removeTarget
+    root.removeTarget = null
+    removeConfirm.visible = false
+    if (mode === "cancel" || !target || !target.remove) return
+    var argv = (mode === "delete") ? target.remove.delete : target.remove.trash
+    if (argv && argv.length > 0) Quickshell.execDetached(argv)
+    settleTimer.restart()
   }
 
   // ── Folders: pick them here, no CLI ──────────────────────────────────
@@ -222,6 +272,33 @@ Item {
         root.scanError = "scan failed (exit " + exitCode + ")"
       }
     }
+  }
+
+  // The one-off pass that lists the archives; it makes the panel rescan, so a
+  // new download turns into a row without the panel ever waiting for it.
+  Process {
+    id: classifyProc
+    running: false
+    onExited: function(exitCode) {
+      root.classifyRunning = false
+      root.rescan()
+    }
+  }
+
+  // A row that is unpacking or installing: keep the status fresh.
+  Timer {
+    interval: 2000
+    repeat: true
+    running: root.hasBusy
+    onTriggered: root.rescan()
+  }
+
+  // One look shortly after a click, before the helper has written its state.
+  Timer {
+    id: settleTimer
+    interval: 800
+    repeat: false
+    onTriggered: root.rescan()
   }
 
   FloatingWindow {
@@ -414,12 +491,38 @@ Item {
                   }
                 }
 
+                Text {
+                  visible: delegateRoot.game && !!delegateRoot.game.status
+                  text: delegateRoot.game ? String(delegateRoot.game.status || "") : ""
+                  color: delegateRoot.game && delegateRoot.game.state === "failed"
+                    ? root.themeUrgent : root.themeMuted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+
+                Button {
+                  visible: delegateRoot.game && !!delegateRoot.game.action
+                  enabled: delegateRoot.game && delegateRoot.game.state !== "running"
+                  text: delegateRoot.game ? String(delegateRoot.game.action || "") : ""
+                  foreground: root.themeFg
+                  bordered: true
+                  tooltipText: delegateRoot.game ? String(delegateRoot.game.action || "") : ""
+                  onClicked: root.act(delegateRoot.game)
+                }
+
                 Button {
                   text: "Launch"
+                  enabled: delegateRoot.game && delegateRoot.game.launch
+                           && delegateRoot.game.launch.length > 0
+                           && delegateRoot.game.state !== "running"
                   foreground: root.themeAccent
                   selected: true
                   bordered: true
-                  tooltipText: "Start " + (delegateRoot.game ? delegateRoot.game.name : "")
+                  tooltipText: (delegateRoot.game && delegateRoot.game.launch
+                                && delegateRoot.game.launch.length > 0)
+                    ? "Start " + delegateRoot.game.name
+                    : "Unpack or install it first"
                   onClicked: root.launch(delegateRoot.game)
                 }
               }
@@ -520,6 +623,76 @@ Item {
         id: folderDialog
         title: "Add a folder to scan"
         onAccepted: root.addFolder(folderDialog.selectedFolder)
+      }
+
+      // Remove archive asks first: the trash is one click and recoverable, a
+      // permanent delete is a second, deliberate one.
+      Rectangle {
+        id: removeConfirm
+        visible: false
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.45)
+
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.min(parent.width - Style.space(40), 440)
+          height: confirmColumn.implicitHeight + Style.space(28)
+          radius: Style.cornerRadius
+          color: root.themeBg
+          border.color: root.lineColor
+          border.width: 1
+
+          ColumnLayout {
+            id: confirmColumn
+            anchors.fill: parent
+            anchors.margins: Style.space(16)
+            spacing: Style.space(10)
+
+            Text {
+              Layout.fillWidth: true
+              text: "Remove " + (root.removeTarget ? root.removeTarget.name : "") + "?"
+              color: root.themeFg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+              elide: Text.ElideRight
+            }
+            Text {
+              Layout.fillWidth: true
+              text: "The unpacked game stays; only the download is removed."
+              color: root.themeMuted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+
+              Button {
+                text: "To the trash"
+                foreground: root.themeAccent
+                selected: true
+                bordered: true
+                tooltipText: "Recoverable, the file lands in the trash"
+                onClicked: root.confirmRemove("trash")
+              }
+              Button {
+                text: "Delete permanently"
+                foreground: root.themeUrgent
+                bordered: true
+                tooltipText: "Frees the disk now, cannot be undone"
+                onClicked: root.confirmRemove("delete")
+              }
+              Item { Layout.fillWidth: true }
+              Button {
+                text: "Cancel"
+                foreground: root.themeFg
+                onClicked: root.confirmRemove("cancel")
+              }
+            }
+          }
+        }
       }
     }
   }

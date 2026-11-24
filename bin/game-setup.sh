@@ -111,9 +111,13 @@ install() {
         write_state running install "$title" "prefix=$prefix"
         say "Preparing $title…"
         # shellcheck disable=SC2086
-        if ! "$WINE_RUN" --proton --setup --in "$prefix" "$archive" $GAMESHELF_VERBS >/dev/null 2>&1; then
-            write_state failed install "$title" "prefix=$prefix" \
-                "error=could not add $GAMESHELF_VERBS to the prefix"
+        if ! setup_log=$("$WINE_RUN" --proton --setup --in "$prefix" "$archive" $GAMESHELF_VERBS 2>&1); then
+            # Say what winetricks said: a busy prefix and a verb that does not
+            # apply here look identical otherwise (measured: two runs in one
+            # prefix fail in 10 s with nothing to show for it).
+            error=$(printf '%s\n' "$setup_log" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-160)
+            [ -n "$error" ] || error="could not add $GAMESHELF_VERBS to the prefix"
+            write_state failed install "$title" "prefix=$prefix" "error=$error"
             say "Could not prepare $title"
             exit 1
         fi
@@ -243,7 +247,7 @@ PY
     : > "$tmp/adopt/drive_c/Games/Adopted/game/AdoptedGame.exe"
     : > "$tmp/inst/Setup.exe"
     cp "$(readlink -f "$0")" "$tmp/fake/bin/game-setup.sh"
-    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$FAKE_CALLS"\nfor a in "$@"; do [ "$a" = --prefix ] && echo "$FAKE_PREFIX"; done\nexit 0\n' > "$tmp/fake/bin/game-wine.sh"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$FAKE_CALLS"\nfor a in "$@"; do [ "$a" = --prefix ] && echo "$FAKE_PREFIX"; done\nif [ "${2:-}" = --setup ] && [ -n "${FAKE_SETUP_FAIL:-}" ]; then echo "winetricks: prefix is busy" >&2; exit 1; fi\nexit 0\n' > "$tmp/fake/bin/game-wine.sh"
     chmod +x "$tmp/fake/bin/game-wine.sh"
     GAMESHELF_STATE_DIR="$tmp/state-adopt" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/adopt" FAKE_CALLS="$tmp/calls" \
         sh "$tmp/fake/bin/game-setup.sh" install "$tmp/inst/Setup.exe"
@@ -275,7 +279,12 @@ PY
         sh "$tmp/fake/bin/game-setup.sh" install "$tmp/inst3/Setup.exe" || true
     grep -qx 'needs=dotnet48' "$tmp/state-hint/$h.state" \
         || { echo "selftest FAILED: a .NET log did not mark the state"; exit 1; }
-    echo "selftest ok: unpack, state, trash, candidates, adopt, verbs"
+    # A setup step that fails says why, instead of a generic line.
+    GAMESHELF_STATE_DIR="$tmp/state-fail" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/empty" FAKE_CALLS="$tmp/calls3" \
+        FAKE_SETUP_FAIL=1 sh "$tmp/fake/bin/game-setup.sh" install --verbs dotnet48 "$tmp/inst3/Setup.exe" || true
+    grep -q 'prefix is busy' "$tmp/state-fail"/*.state \
+        || { echo "selftest FAILED: a failed setup step lost its reason"; exit 1; }
+    echo "selftest ok: unpack, state, trash, candidates, adopt, verbs, 2 reasons"
 }
 
 mode=${1:-}

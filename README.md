@@ -221,6 +221,7 @@ Four variables, all optional — the defaults are what the panel uses:
 | `GAMESHELF_WINE_DIR` | `~/.local/share/gameshelf/wine` | the per-game Wine/Proton prefixes |
 | `GAMESHELF_PROTON` | *(first installed build)* | which Proton to run instead of `~/.local/share/Steam/steamapps/common/Proton*` |
 | `GAMESHELF_STATE_DIR` | `~/.local/share/gameshelf/tasks` | the one-file-per-task state the panel reads, and the archive cache beside it |
+| `GAMESHELF_PROTON_LOG` | *(off)* | set to `1` and Proton keeps its own log per launch under `~/.local/share/gameshelf/proton-logs` — the only thing that says anything about a game that hangs |
 
 The bar icon counts what can actually be started, so a download waiting to be
 unpacked does not inflate the number next to it.

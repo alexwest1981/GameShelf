@@ -159,6 +159,13 @@ if [ "$proton" = 1 ]; then
     if build=$(proton_build) && [ -x "$build/proton" ]; then
         export STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
         export STEAM_COMPAT_DATA_PATH=$data
+        # A game that hangs gives no hint by itself. GAMESHELF_PROTON_LOG=1 keeps
+        # Proton's own log next to the prefixes, so the next one can be read.
+        if [ -n "${GAMESHELF_PROTON_LOG:-}" ]; then
+            export PROTON_LOG=1
+            export PROTON_LOG_DIR="${GAMESHELF_PROTON_LOG_DIR:-$HOME/.local/share/gameshelf/proton-logs}"
+            mkdir -p "$PROTON_LOG_DIR"
+        fi
         exec "$build/proton" run "$exe" "$@"
     fi
     echo "game-wine.sh: no Proton build found, falling back to wine" >&2

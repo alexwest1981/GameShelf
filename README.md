@@ -186,6 +186,25 @@ the installer again, while the status line keeps the line the installer wrote, s
 it is still clear why. Nothing is detected in any other case — a row that fails
 for another reason keeps its `Install <game>` button.
 
+## Covers for downloads
+
+A repack on disk carries no picture, so the name is looked up once in Steam's
+store search (no API key, nothing to sign up for) and the header art is cached
+under `~/.local/share/gameshelf/covers/`. The pass runs out of band — the panel
+never waits for the network — and only once per name:
+
+```sh
+python3 scan-games.py --covers '{"folders":["~/Downloads"]}'   # what the panel runs
+GAMESHELF_COVERS=0 ...                                        # turn the lookup off
+```
+
+Matching is deliberately blunt: the name has to come out equal after normalising
+(punctuation, case, a version tag), or prefix the result exactly, so an artbook
+sitting above the game in Steam's results never becomes its cover. A name that
+does not match is remembered as a miss and never asked again. Measured on this
+library: 86 lookups, 57 covers, 29 misses, 76 s, 3.0 MB — the covers belong to
+Valve's CDN and are only used to draw a private list.
+
 ## Environment
 
 Four variables, all optional — the defaults are what the panel uses:

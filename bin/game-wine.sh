@@ -129,6 +129,11 @@ if [ "$mode" = setup ]; then
         if [ ! -d "$data/pfx" ] && build=$(proton_build) && [ -x "$build/proton" ]; then
             STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}" \
             STEAM_COMPAT_DATA_PATH="$data" "$build/proton" run wineboot.exe >/dev/null 2>&1 || true
+            # Proton's wineserver outlives that run; system wine then sees a busy
+            # prefix and winetricks gives up in seconds (measured). Shut it down
+            # with Proton's own wineserver so the protocols match, then wait.
+            WINEPREFIX="$data/pfx" "$build/files/bin/wineserver" -k >/dev/null 2>&1 || true
+            sleep 1
         fi
         # Proton keeps its prefix in $data/pfx. Proton's own wine cannot run the
         # .NET installer (measured: dotNetFx40 ends status 67, no v4 key at all,

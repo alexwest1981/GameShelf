@@ -115,7 +115,8 @@ install() {
             # Say what winetricks said: a busy prefix and a verb that does not
             # apply here look identical otherwise (measured: two runs in one
             # prefix fail in 10 s with nothing to show for it).
-            error=$(printf '%s\n' "$setup_log" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-160)
+            error=$(printf '%s\n' "$setup_log" | tr -d '\r' | grep -v '^[[:space:]]*$' \
+                | grep -vE '^-+$' | tail -1 | cut -c1-160)
             [ -n "$error" ] || error="could not add $GAMESHELF_VERBS to the prefix"
             write_state failed install "$title" "prefix=$prefix" "error=$error"
             say "Could not prepare $title"

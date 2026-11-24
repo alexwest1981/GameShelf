@@ -18,7 +18,15 @@ BarWidget {
   property var games: []
   property string scanError: ""
 
-  readonly property int gameCount: games.length
+  // A download that is not unpacked yet is a row, not a game: the icon counts
+  // what you can actually start.
+  readonly property int gameCount: {
+    var n = 0
+    for (var i = 0; i < games.length; i++) {
+      if (games[i].launch && games[i].launch.length > 0) n++
+    }
+    return n
+  }
   readonly property string tooltip: {
     if (scanError !== "") return "GameShelf — " + scanError
     if (gameCount === 0) return "GameShelf — no games found"

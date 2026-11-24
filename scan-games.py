@@ -810,6 +810,7 @@ def scan_folders(opts, hidden, known_dirs, states, cache):
 STEAM_SEARCH = "https://store.steampowered.com/api/storesearch/?cc=se&l=en&term="
 STEAM_DETAILS = "https://store.steampowered.com/api/appdetails?l=en&appids="
 COVER_TIMEOUT = 15
+COVER_QUERY = 2   # bump when the query changes: a cached miss is then retried
 
 
 def cover_key(name):
@@ -880,19 +881,23 @@ def http_file(url, dest, timeout=COVER_TIMEOUT):
 
 
 def fetch_cover(name, cache_dir):
-    """Download one cover. Returns a cache entry: {file} or {miss}."""
-    found = http_json(STEAM_SEARCH + urllib_quote(name))
+    """Download one cover. Returns a cache entry: {file} or {miss}.
+
+    The *normalised* name is the query: Steam finds nothing for 'DOOM + DOOM II'
+    (the plus arrives as %2B) but finds appid 2280 for 'DOOM DOOM II'.
+    """
+    found = http_json(STEAM_SEARCH + urllib_quote(cover_key(name)))
     appid = match_cover((found or {}).get("items"), name)
     if not appid:
-        return {"miss": 1}
+        return {"miss": 1, "q": COVER_QUERY}
     detail = http_json(STEAM_DETAILS + appid)
     data = ((detail or {}).get(appid) or {}).get("data") or {}
     url = data.get("header_image") or ""
     if not url:
-        return {"miss": 1}
+        return {"miss": 1, "q": COVER_QUERY}
     dest = os.path.join(cache_dir, hashlib.md5(cover_key(name).encode()).hexdigest() + ".jpg")
     if not http_file(url, dest):
-        return {"miss": 1}
+        return {"miss": 1, "q": COVER_QUERY}
     return {"appid": appid, "name": data.get("name") or name, "file": dest}
 
 
@@ -913,8 +918,10 @@ def covers_pass(opts):
         if game.get("iconFile") or game.get("iconName") or game.get("state"):
             continue                       # it has art, or it is a download row
         key = cover_key(game.get("name") or "")
-        if not key or key in cache:
+        if not key or (key in cache and cache[key].get("miss") is None):
             continue
+        if cache.get(key, {}).get("q") == COVER_QUERY:
+            continue                      # this exact question was already asked
         os.makedirs(cache_dir, exist_ok=True)
         cache[key] = fetch_cover(game.get("name") or "", cache_dir)
         save_cache(path, cache)            # one at a time: a kill keeps the rest
@@ -980,7 +987,9 @@ def scan(opts):
         entry = covers.get(cover_key(g.get("name") or "")) or {}
         if entry.get("file") and os.path.exists(entry["file"]):
             g["iconFile"] = entry["file"]
-        elif covers_on:
+        elif covers_on and entry.get("q") != COVER_QUERY:
+            # Only a question that was never asked counts: a remembered miss is
+            # an answer, and asking again would open a process on every panel.
             missing.add(cover_key(g.get("name") or ""))
     games.sort(key=lambda g: (g["source"], str(g["name"]).lower()))
     counts = {}

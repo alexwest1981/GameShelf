@@ -87,17 +87,24 @@ find_games() {  # find_games <prefix dir>: likely game executables, biggest firs
 install() {
     title=$(basename "$archive"); title=${title%.*}
     prefix=$("$WINE_RUN" --proton --prefix "$archive")
+    # Inno Setup writes a real log here; an installer that does not know /LOG
+    # ignores the argument.
+    inno_log="$STATE_DIR/$(basename "$state_file" .state)-install.log"
+    mkdir -p "$STATE_DIR"
     write_state running install "$title" "prefix=$prefix"
     say "Installing $title…"
-    if ! "$WINE_RUN" --proton --in "$prefix" "$archive"; then
-        write_state failed install "$title" "prefix=$prefix" "error=installer exited with an error"
-        say "Installer for $title failed"
-        exit 1
-    fi
+    rc=0
+    "$WINE_RUN" --proton --in "$prefix" "$archive" "/LOG=Z:$inno_log" >/dev/null 2>&1 || rc=$?
+    # The exit code is not the answer: a repack often ends non-zero after a
+    # successful extract (its last page starts the game, and that child dies).
+    # What counts is whether a game is in the prefix - measured on this box:
+    # ReStory/Vanya installed fine and still exited non-zero.
     games=$(find_games "$prefix") || games=
     if [ -z "$games" ]; then
-        write_state failed install "$title" "prefix=$prefix" "error=no game found in the prefix"
-        say "Nothing to launch in $title"
+        error=$(log_tail "$inno_log")
+        [ -n "$error" ] || error="installer exited $rc and left no game in the prefix"
+        write_state failed install "$title" "prefix=$prefix" "error=$error"
+        say "Installer for $title failed"
         exit 1
     fi
     {
@@ -106,6 +113,12 @@ install() {
     } > "$state_file.tmp"
     mv "$state_file.tmp" "$state_file"
     say "$title is ready"
+}
+
+# The last line an installer actually wrote, so a failure can say why.
+log_tail() {
+    [ -f "$1" ] || return 0
+    tr -d '\r' < "$1" | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-160
 }
 
 remove() {

@@ -161,9 +161,12 @@ if [ "$proton" = 1 ]; then
         export STEAM_COMPAT_DATA_PATH=$data
         # A game that hangs gives no hint by itself. GAMESHELF_PROTON_LOG=1 keeps
         # Proton's own log next to the prefixes, so the next one can be read.
+        # Proton's setup_logging() bails out unless SteamGameId is set — that is
+        # the whole reason an earlier attempt wrote no log at all.
         if [ -n "${GAMESHELF_PROTON_LOG:-}" ]; then
             export PROTON_LOG=1
             export PROTON_LOG_DIR="${GAMESHELF_PROTON_LOG_DIR:-$HOME/.local/share/gameshelf/proton-logs}"
+            export SteamGameId="${GAMESHELF_STEAM_APP_ID:-0}"
             mkdir -p "$PROTON_LOG_DIR"
         fi
         exec "$build/proton" run "$exe" "$@"

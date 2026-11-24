@@ -142,6 +142,13 @@ install() {
     games=$(find_games "$prefix") || games=
     if [ -z "$games" ]; then
         error=$(log_tail "$inno_log")
+        # Inno can log "Installation process succeeded." and still exit non-zero:
+        # a repack's own extraction stage runs after it and dies (measured on
+        # DOOM + DOOM II: exit 253, seven files, no game). Then the exit code is
+        # the honest part, not the log's cheerful last line.
+        case "$(printf '%s' "$error" | tr 'A-Z' 'a-z')" in
+            *succeeded* | *"installation complete"*) error= ;;
+        esac
         [ -n "$error" ] || error="installer exited $rc and left no game in the prefix"
         if needs=$(log_hint "$inno_log") && [ -n "$needs" ]; then
             write_state failed install "$title" "prefix=$prefix" "error=$error" "needs=$needs"
@@ -264,7 +271,7 @@ PY
     : > "$tmp/adopt/drive_c/Games/Adopted/game/AdoptedGame.exe"
     : > "$tmp/inst/Setup.exe"
     cp "$(readlink -f "$0")" "$tmp/fake/bin/game-setup.sh"
-    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$FAKE_CALLS"\nfor a in "$@"; do [ "$a" = --prefix ] && echo "$FAKE_PREFIX"; done\nif [ "${2:-}" = --setup ] && [ -n "${FAKE_SETUP_FAIL:-}" ]; then echo "winetricks: prefix is busy" >&2; exit 1; fi\nexit 0\n' > "$tmp/fake/bin/game-wine.sh"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$FAKE_CALLS"\nfor a in "$@"; do [ "$a" = --prefix ] && echo "$FAKE_PREFIX"; done\nif [ "${2:-}" = --setup ] && [ -n "${FAKE_SETUP_FAIL:-}" ]; then echo "winetricks: prefix is busy" >&2; exit 1; fi\ncase "$*" in */DIR=*) [ -n "${FAKE_INSTALL_FAIL:-}" ] && exit 253 ;; esac\nexit 0\n' > "$tmp/fake/bin/game-wine.sh"
     chmod +x "$tmp/fake/bin/game-wine.sh"
     GAMESHELF_STATE_DIR="$tmp/state-adopt" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/adopt" FAKE_CALLS="$tmp/calls" \
         sh "$tmp/fake/bin/game-setup.sh" install "$tmp/inst/Setup.exe"
@@ -312,7 +319,16 @@ PY
     esac
     grep -q -- '/DIR=C:\\Games' "$tmp/calls3" \
         || { echo "selftest FAILED: the installer got no /DIR inside the prefix"; exit 1; }
-    echo "selftest ok: unpack, state, trash, candidates, adopt, verbs, 2 reasons, /DIR"
+    # A log that says "succeeded" while the installer exits 253 must not become
+    # the row's message: the exit code is the honest part.
+    printf '2026-11-24 14:59:29.977   Installation process succeeded.\n' > "$tmp/lies.log"
+    h2=$(printf '%s' "$(readlink -f "$tmp/inst3/Setup.exe")" | md5sum | cut -c1-16)
+    cp "$tmp/lies.log" "$tmp/state-lies/$h2-install.log" 2>/dev/null || { mkdir -p "$tmp/state-lies"; cp "$tmp/lies.log" "$tmp/state-lies/$h2-install.log"; }
+    GAMESHELF_STATE_DIR="$tmp/state-lies" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/empty" FAKE_CALLS="$tmp/calls3" \
+        FAKE_INSTALL_FAIL=1 sh "$tmp/fake/bin/game-setup.sh" install "$tmp/inst3/Setup.exe" || true
+    grep -q 'installer exited 253' "$tmp/state-lies/$h2.state" \
+        || { echo "selftest FAILED: a lying log became the reason"; exit 1; }
+    echo "selftest ok: unpack, state, trash, candidates, adopt, verbs, 2 reasons, /DIR, exit-code"
 }
 
 mode=${1:-}

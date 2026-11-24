@@ -225,6 +225,12 @@ bash bin/game-setup.sh --selftest  # unpack, state file, --trash, --delete, cand
 - **An archive needs a starter inside** to be offered: an `.exe`, an `.AppImage`, a
   `.pck`, a `.pak`. A native Linux game zipped around a bare `.x86_64` binary is not
   offered — unpack that one by hand; the folder row finds it.
+- **An install counts by what it left, not by its exit code.** A repack's
+  `Setup.exe` often ends non-zero after a successful extract (its last page
+  starts the game, and that child dies), so the game in the prefix decides.
+  Pressing Install on a row whose prefix already holds a game skips the
+  installer and adopts it. A helper that dies mid-run is offered as a retry
+  after two hours instead of sitting on `Installing…`.
 - **One row per download.** Two repacks of the same game (a FitGirl and a KaOs) are
   two rows. Hide one.
 - **The background classify pass runs from the panel.** The bar icon's count can be

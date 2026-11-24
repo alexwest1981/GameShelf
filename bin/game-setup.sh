@@ -31,7 +31,8 @@ write_state() {  # write_state <state> <kind> <title> [extra key=value...]
     state=$1; kind=$2; title=$3; shift 3
     mkdir -p "$STATE_DIR"
     {
-        printf 'state=%s\nkind=%s\ntitle=%s\ntask=%s\n' "$state" "$kind" "$title" "$task"
+        printf 'state=%s\nkind=%s\ntitle=%s\ntask=%s\nsince=%s\n' \
+            "$state" "$kind" "$title" "$task" "$(date +%s)"
         for line in "$@"; do printf '%s\n' "$line"; done
     } > "$state_file.tmp"
     mv "$state_file.tmp" "$state_file"
@@ -72,7 +73,11 @@ unpack() {
         while [ -e "$target" ]; do target="$GAMES_DIR/$title ($n)"; n=$((n + 1)); done
         mv "$stage" "$target"
     fi
-    write_state ready unpack "$title" "dest=$target"
+    {
+        printf 'state=ready\nkind=unpack\ntitle=%s\ntask=%s\ndest=%s\nsince=%s\n' \
+            "$title" "$task" "$target" "$(date +%s)"
+    } > "$state_file.tmp"
+    mv "$state_file.tmp" "$state_file"
     say "$title is ready"
 }
 
@@ -87,10 +92,18 @@ find_games() {  # find_games <prefix dir>: likely game executables, biggest firs
 install() {
     title=$(basename "$archive"); title=${title%.*}
     prefix=$("$WINE_RUN" --proton --prefix "$archive")
+    mkdir -p "$STATE_DIR"
+    # A prefix that already holds a game — a run that ended non-zero after a
+    # successful extract — is adopted instead of installing all of it again.
+    games=$(find_games "$prefix") || games=
+    if [ -n "$games" ]; then
+        write_ready
+        say "$title is ready"
+        return 0
+    fi
     # Inno Setup writes a real log here; an installer that does not know /LOG
     # ignores the argument.
     inno_log="$STATE_DIR/$(basename "$state_file" .state)-install.log"
-    mkdir -p "$STATE_DIR"
     write_state running install "$title" "prefix=$prefix"
     say "Installing $title…"
     rc=0
@@ -107,12 +120,17 @@ install() {
         say "Installer for $title failed"
         exit 1
     fi
+    write_ready
+    say "$title is ready"
+}
+
+write_ready() {
     {
-        printf 'state=ready\nkind=install\ntitle=%s\ntask=%s\nprefix=%s\n' "$title" "$task" "$prefix"
+        printf 'state=ready\nkind=install\ntitle=%s\ntask=%s\nprefix=%s\nsince=%s\n' \
+            "$title" "$task" "$prefix" "$(date +%s)"
         printf '%s\n' "$games" | sed 's/^/game=/'
     } > "$state_file.tmp"
     mv "$state_file.tmp" "$state_file"
-    say "$title is ready"
 }
 
 # The last line an installer actually wrote, so a failure can say why.
@@ -182,7 +200,21 @@ PY
     found=$(find_games "$tmp/pfx")
     [ "$found" = "$tmp/pfx/drive_c/Games/Shelf/game/Shelf.exe" ] \
         || { echo "selftest FAILED: candidate search found '$found'"; exit 1; }
-    echo "selftest ok: unpack, state, trash, candidates"
+
+    # A prefix that already holds a game is adopted instead of installing it all
+    # over again: the copy gets a stub game-wine.sh that only answers --prefix.
+    mkdir -p "$tmp/adopt/drive_c/Games/Adopted/game" "$tmp/fake/bin" "$tmp/inst"
+    : > "$tmp/adopt/drive_c/Games/Adopted/game/AdoptedGame.exe"
+    : > "$tmp/inst/Setup.exe"
+    cp "$(readlink -f "$0")" "$tmp/fake/bin/game-setup.sh"
+    printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = --prefix ] && echo "$FAKE_PREFIX"; done\nexit 0\n' > "$tmp/fake/bin/game-wine.sh"
+    chmod +x "$tmp/fake/bin/game-wine.sh"
+    GAMESHELF_STATE_DIR="$tmp/state-adopt" GAMESHELF_QUIET=1 FAKE_PREFIX="$tmp/adopt" \
+        sh "$tmp/fake/bin/game-setup.sh" install "$tmp/inst/Setup.exe"
+    adopt_state=$(ls "$tmp/state-adopt"/*.state)
+    grep -qx 'state=ready' "$adopt_state" || { echo "selftest FAILED: adopt did not end ready"; exit 1; }
+    grep -q 'AdoptedGame.exe' "$adopt_state" || { echo "selftest FAILED: adopt lost the game"; exit 1; }
+    echo "selftest ok: unpack, state, trash, candidates, adopt"
 }
 
 mode=${1:-}

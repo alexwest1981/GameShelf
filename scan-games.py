@@ -15,6 +15,13 @@ Sources, each switchable in the plugin settings:
   folders  executables that look like game launchers, up to DEPTH levels
            below each folder you configure
 
+A download that is not a game yet shows up as a row that turns it into one: a
+repack archive (.rar/.zip/.7z holding a starter) gets Unpack, a downloaded
+installer (setup.exe, Install.exe) gets Install. bin/game-setup.sh does the work
+and writes one <hash>.state file per task under
+~/.local/share/gameshelf/tasks; the state is read here so a row can show status
+and only offer Launch once the game really exists.
+
 Usage:
   scan-games.py '{"sources":["steam","heroic","folders"],"folders":["~/Downloads"],"hidden":["steam:892970"]}'
   scan-games.py --selftest          # fixture tree in a temp dir, no real home
@@ -29,12 +36,14 @@ per-launcher shell quoting.
 """
 
 import glob
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 DEPTH = 3  # how deep below a configured folder we look for a game launcher
 
@@ -68,11 +77,25 @@ NOT_THE_GAME = re.compile(
 )
 # Folders a repack drops the game into; the title comes from further up.
 GENERIC_DIR = re.compile(
-    r"^(game|games|bin|x64|x86|win64|win32|data|files|dist|build|release|app|contents|windows|linux|macos)$",
+    r"^(game|games|bin|x64|x86|win64|win32|data|files|dist|build|release|app|contents|windows|linux|macos"
+    r"|setup|install|installer)$",
     re.I,
 )
 # The Wine starter, found next to this file so a renamed plugin folder still works.
 WINE_RUN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bin", "game-wine.sh")
+# The unpack/install helper, next to it for the same reason.
+GAME_SETUP = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bin", "game-setup.sh")
+
+# A download you have to unpack. What makes an archive a game rather than a
+# texture or sound pack is a starter inside it: a Windows/Linux executable, a
+# Godot .pck, an Unreal .pak. Measured on this box: 15 of 16 flagged archives in
+# ~/Downloads were games, and no asset pack was flagged.
+ARCHIVE = re.compile(r"\.(rar|zip|7z)$", re.I)
+STARTER = re.compile(r"\.(exe|AppImage|pck|pak)$|_data/", re.I)
+# Something you run once to get a game: FitGirl/KaOs/Vanya repacks, a GOG setup.
+INSTALLER = re.compile(r"(^|[\s._-])(setup|install|installer)", re.I)
+ARCHIVE_TIMEOUT = 60   # seconds to list one archive: a cold 16 GB rar takes ~20,
+                       # and this runs in the background pass, not in the scan
 
 
 def home_of(opts):
@@ -356,12 +379,15 @@ def scan_heroic(home, hidden):
 def launcher_rank(entry):
     """How good a starter is this file, or None when it is not one at all.
 
-    Native starter first, AppImage next, any other script, and last of all a
-    bare Windows executable - which needs Wine and only wins in a folder that
-    has nothing else in it.
+    Native starter first, AppImage next, any other script, then a bare Windows
+    executable - which needs Wine and only wins in a folder that has nothing
+    better. Rank 5 is not a game at all: it is an installer, and the panel offers
+    to run it once instead of launching it.
     """
     name = entry.name
     if name.lower().endswith(".exe"):
+        if INSTALLER.search(name) and not re.search(r"unins|redist|crash|dxsetup|vc_redist", name, re.I):
+            return 5
         return None if NOT_THE_GAME.search(name) else 4
     if SKIP_FILE.search(name) or not LAUNCHER.search(name):
         return None
@@ -373,7 +399,7 @@ def launcher_rank(entry):
 
 
 def walk_launchers(root, depth=DEPTH):
-    """Yield the best launcher in each folder below root that holds one.
+    """Yield (rank, path) for the best starter in each folder below root.
 
     ponytail: one row per directory, so a repack that ships both a native and a
     Wine starter (start.n.sh / start.e-w.sh) yields one game, not two. Prefer
@@ -409,7 +435,7 @@ def walk_launchers(root, depth=DEPTH):
         if any(d != k and d.startswith(k.rstrip("/") + "/") and found[k][0] <= rank
                for k in found):
             continue
-        yield path
+        yield rank, path
 
 
 def _folder_title(path):
@@ -421,23 +447,275 @@ def _folder_title(path):
         path = os.path.dirname(path)
 
 
-def scan_folders(opts, hidden, known_dirs):
-    games = []
+# ── Downloads that are not games yet ─────────────────────────────────────────
+
+def state_dir(opts):
+    """Where bin/game-setup.sh leaves one <hash>.state per task it is doing."""
+    return (opts.get("stateDir")
+            or os.environ.get("GAMESHELF_STATE_DIR")
+            or (os.environ.get("XDG_DATA_HOME") or f"{home_of(opts)}/.local/share") + "/gameshelf/tasks")
+
+
+def read_states(directory):
+    """Read the task state files: one key=value line each, `game=` repeatable."""
+    states = {}
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return states
+    for name in names:
+        if not name.endswith(".state"):
+            continue
+        data = {}
+        try:
+            lines = open(os.path.join(directory, name), errors="replace").read().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            key, _, value = line.partition("=")
+            if key == "game":
+                data.setdefault("games", []).append(value)
+            elif key:
+                data[key] = value
+        if data.get("task"):
+            states[data["task"]] = data
+    return states
+
+
+def archive_names(path, timeout=ARCHIVE_TIMEOUT):
+    """Entry names inside an archive, or None when nothing could tell us.
+
+    ponytail: stdlib zipfile for .zip, unrar for .rar (7z cannot read RAR5), 7z
+    for the rest. None means "ask again next scan", never "not a game".
+    """
+    if path.lower().endswith(".zip"):
+        try:
+            with zipfile.ZipFile(path) as z:
+                return z.namelist()
+        except Exception:
+            return None
+    if path.lower().endswith(".rar"):
+        out = run(["unrar", "lb", path], timeout=timeout)
+        return out.stdout.splitlines() if out and out.returncode == 0 else None
+    out = run(["7z", "l", "-ba", path], timeout=timeout)
+    if not (out and out.returncode == 0):
+        return None
+    # date time attr size packed name -- the name may hold spaces
+    return [line.split(None, 5)[5] for line in out.stdout.splitlines() if len(line.split(None, 5)) == 6]
+
+
+def archive_cache(opts):
+    path = os.path.join(os.path.dirname(state_dir(opts)), "archives.json")
+    try:
+        return path, json.load(open(path))
+    except (OSError, ValueError):
+        return path, {}
+
+
+def archive_key(path):
+    try:
+        return "%s|%d|%d" % (path, os.path.getsize(path), int(os.path.getmtime(path)))
+    except OSError:
+        return None
+
+
+def cached_answer(path, cache):
+    """1 = a game archive, 0 = not one, None = never classified.
+
+    Listing a 16 GB cold rar takes ~20 s, so the scan itself never lists one:
+    --classify does that out of band and the panel rescans when it is done.
+    """
+    key = archive_key(path)
+    return cache.get(key) if key else None
+
+
+def classify_archive(path, cache, timeout=ARCHIVE_TIMEOUT):
+    """List one archive and remember the answer. False when nothing could tell."""
+    key = archive_key(path)
+    names = archive_names(path, timeout=timeout)
+    if names is None or key is None:
+        return False
+    cache[key] = 1 if any(STARTER.search(n) for n in names) else 0
+    return True
+
+
+def folder_list(opts):
     folders = opts.get("folders") or []
     if isinstance(folders, str):
         folders = folders.split(",")
-    home = home_of(opts)
-    for folder in folders:
-        if not str(folder).strip():
+    return [os.path.expanduser(str(f).strip()) for f in folders if str(f).strip()]
+
+
+def classify_archives(opts):
+    """Fill the archive cache. One archive per new download, so this only costs
+    time the first time an archive is seen."""
+    cache_path, cache = archive_cache(opts)
+    done = 0
+    for folder in folder_list(opts):
+        for arc in archives_below(folder):
+            real = os.path.realpath(arc)
+            if cached_answer(real, cache) is not None:
+                continue
+            if os.path.isdir(ARCHIVE.sub("", real)):
+                continue    # unpacked by hand: it gets a folder row, not an archive row
+            if classify_archive(real, cache):
+                done += 1
+    save_cache(cache_path, cache)
+    return done
+
+
+def save_cache(path, cache):
+    try:
+        json.dump(cache, open(path, "w"))
+    except OSError:
+        pass
+
+
+def archives_below(root, depth=DEPTH):
+    """Every archive in the folders you configured, to the same depth."""
+    stack = [(root, 0)]
+    while stack:
+        path, level = stack.pop()
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
             continue
-        for starter in walk_launchers(str(folder).strip()):
-            real = os.path.realpath(starter)
-            if os.path.dirname(real) in known_dirs:
-                continue  # a launcher already lists this folder
-            known_dirs.add(os.path.dirname(real))
+        for e in entries:
+            if e.is_dir(follow_symlinks=False):
+                if level + 1 < depth and not e.name.startswith("."):
+                    stack.append((e.path, level + 1))
+            elif ARCHIVE.search(e.name):
+                yield e.path
+
+
+def human_size(n):
+    for unit in ("B", "kB", "MB", "GB"):
+        if n < 1000:
+            return "%d %s" % (n, unit)
+        n //= 1000
+    return "%d TB" % n
+
+
+def clean_title(name):
+    """'Borderlands.4.v1.11.REPACK-KaOs' -> 'Borderlands 4'. A scene tag or a
+    version is not part of the title, and 'Install Borderlands.4.v1.11.REPACK-KaOs'
+    reads like a file listing instead of a game."""
+    s = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", name)                     # [FitGirl Repack], (x64)
+    s = re.sub(r"(?i)[._ -]v\d[\d.]*", " ", s)                         # .v1.11, .v20260901
+    s = re.sub(r"\b\d+(\.\d+)+", " ", s)                               # 12.4.5, 1.11
+    # A tag only counts next to a separator: a game may be called Rune Factory.
+    s = re.sub(r"(?i)[._ -](repack|fitgirl|kaos|vanya|dodi|elamigos|tenoke"
+               r"|rune|codex|plaza|skidrow|jc141)\b", " ", s)
+    return re.sub(r"[._-]+", " ", s).strip()
+
+
+def first_game(root):
+    """The starter the folder walk likes best under root, or None."""
+    for rank, path in walk_launchers(root, depth=DEPTH + 2):
+        if rank < 5:
+            return path
+    return None
+
+
+def scan_folders(opts, hidden, known_dirs, states, cache):
+    """Rows for the folders you pointed at: games that are ready, and downloads
+    that are not - an archive to unpack, an installer to run."""
+    games, pending = [], 0
+    home = home_of(opts)
+    for folder in folder_list(opts):
+
+        # A download keeps a row of its own: before unpacking it is all that
+        # exists, and afterwards that row owns the game it produced (so the walk
+        # below does not list the same game twice) with Remove archive as its
+        # button.
+        for arc in sorted(archives_below(folder)):
+            real = os.path.realpath(arc)
             gid = "file:" + real
             if gid in hidden:
                 continue
+            state = states.get(real) or {}
+            if not state and os.path.isdir(ARCHIVE.sub("", real)):
+                continue  # unpacked by hand already: the folder row has it
+            if not state:
+                answer = cached_answer(real, cache)
+                if answer is None:
+                    pending += 1   # --classify answers; the panel rescans then
+                    continue
+                if answer == 0:
+                    continue
+            row = {
+                "id": gid,
+                "name": clean_title(os.path.basename(ARCHIVE.sub("", real))),
+                "source": "folders",
+                "detail": "Archive · " + human_size(os.path.getsize(real)) + " · " + real.replace(home, "~"),
+                "launch": [],
+                "action": "Unpack",
+                "run": [GAME_SETUP, "unpack", real],
+            }
+            if state.get("state") == "running":
+                row["state"] = "running"
+                row["status"] = "Unpacking…"
+            elif state.get("state") == "failed":
+                row["state"] = "failed"
+                row["status"] = "Unpack failed — press Unpack to retry"
+            elif state.get("state") == "ready":
+                starter = first_game(state.get("dest") or "")
+                row["action"] = "Remove archive"
+                del row["run"]
+                # Remove archive asks the panel for trash-or-delete, so the row
+                # only carries those once there is nothing left to unpack.
+                row["remove"] = {"trash": [GAME_SETUP, "remove", real, "--trash"],
+                                 "delete": [GAME_SETUP, "remove", real, "--delete"]}
+                if starter:
+                    known_dirs.add(os.path.dirname(starter))
+                    row["launch"] = [WINE_RUN, "--proton", starter]
+                    row["detail"] = "Unpacked · " + starter.replace(home, "~")
+            games.append(row)
+
+        for rank, starter in walk_launchers(folder):
+            real = os.path.realpath(starter)
+            gid = "file:" + real
+            if gid in hidden:
+                continue
+            state = states.get(real) or {}
+            if rank == 5:
+                # An installer: run it once, then the games it left in the prefix
+                # get rows of their own - they sit inside the prefix, where this
+                # walk cannot reach them.
+                title = clean_title(_folder_title(os.path.dirname(real)))
+                known_dirs.add(os.path.dirname(real))
+                if state.get("state") == "running":
+                    games.append({
+                        "id": gid, "name": title, "source": "folders",
+                        "detail": "Installing · " + real.replace(home, "~"),
+                        "launch": [], "action": "Install " + title,
+                        "run": [GAME_SETUP, "install", real],
+                        "state": "running", "status": "Installing…",
+                    })
+                elif state.get("games"):
+                    for exe in state["games"]:
+                        games.append({
+                            "id": "file:" + exe,
+                            "name": title,
+                            "source": "folders",
+                            "detail": "Installed · " + exe.replace(home, "~"),
+                            "launch": [WINE_RUN, "--proton", "--in", state.get("prefix", ""), exe],
+                        })
+                else:
+                    row = {
+                        "id": gid, "name": title, "source": "folders",
+                        "detail": "Installer · " + human_size(os.path.getsize(real)) + " · " + real.replace(home, "~"),
+                        "launch": [], "action": "Install " + title,
+                        "run": [GAME_SETUP, "install", real],
+                    }
+                    if state.get("state") == "failed":
+                        row["state"] = "failed"
+                        row["status"] = "Install failed — press Install to retry"
+                    games.append(row)
+                continue
+            if os.path.dirname(real) in known_dirs:
+                continue  # a launcher already lists this folder
+            known_dirs.add(os.path.dirname(real))
             name = re.sub(r"[._-]+", " ", _folder_title(os.path.dirname(real))).strip()
             if real.lower().endswith(".exe"):
                 # A bare Windows game: Wine, in a prefix of its own.
@@ -462,7 +740,7 @@ def scan_folders(opts, hidden, known_dirs):
                 "detail": real.replace(home, "~"),
                 "launch": launch,
             })
-    return games
+    return games, pending
 
 
 # ── Assembly ─────────────────────────────────────────────────────────────────
@@ -503,9 +781,13 @@ def scan(opts):
             games += scan_desktop(opts, hidden)
         except Exception as e:
             errors.append(f"desktop: {e}")
+    pending_archives = 0
     if "folders" in sources:
         try:
-            games += scan_folders(opts, hidden, used_exe)
+            _, cache = archive_cache(opts)
+            found, pending_archives = scan_folders(opts, hidden, used_exe,
+                                                   read_states(state_dir(opts)), cache)
+            games += found
         except Exception as e:
             errors.append(f"folders: {e}")
 
@@ -515,7 +797,8 @@ def scan(opts):
     counts = {}
     for g in games:
         counts[g["source"]] = counts.get(g["source"], 0) + 1
-    return {"games": games, "counts": counts, "errors": errors}
+    return {"games": games, "counts": counts, "errors": errors,
+            "pendingClassification": pending_archives}
 
 
 # ── Self-check ───────────────────────────────────────────────────────────────
@@ -615,6 +898,88 @@ def selftest():
     assert not [i for i in ("desktop:steam", "desktop:net.lutris.Lutris", "desktop:valheim",
                             "desktop:nodisplay") if i in ids], \
         "a launcher, a reverse-DNS launcher, a Steam shortcut and a NoDisplay entry are not games"
+    # ── Downloads that are not games yet ────────────────────────────────
+    dl = f"{tmp}/dl"
+    os.makedirs(dl)
+
+    def zip_of(path, entries):
+        with zipfile.ZipFile(path, "w") as z:
+            for name in entries:
+                z.writestr(name, "MZ")
+
+    zip_of(f"{dl}/Ball.Game.zip", ["Ball.Game/game/Ball.exe"])
+    zip_of(f"{dl}/Fresh.Game.zip", ["Fresh.Game/game/Fresh.exe"])
+    zip_of(f"{dl}/Texture.Pack.zip", ["Texture.Pack/wood.png"])
+    zip_of(f"{dl}/Has.Twin.zip", ["Has.Twin/game/Has.Twin.exe"])
+    os.makedirs(f"{dl}/Has.Twin")
+    open(f"{dl}/Has.Twin/start.sh", "w").write("#!/bin/sh\n")
+    os.chmod(f"{dl}/Has.Twin/start.sh", 0o755)
+    os.makedirs(f"{dl}/Teardown [FitGirl Repack]")
+    open(f"{dl}/Teardown [FitGirl Repack]/Setup.exe", "w").write("MZ")
+
+    states_dir = f"{tmp}/state"
+    os.makedirs(states_dir)
+
+    def state_of(path, *lines):
+        real = os.path.realpath(path)
+        name = hashlib.md5(real.encode()).hexdigest()[:16] + ".state"
+        open(f"{states_dir}/{name}", "w").write("\n".join([f"task={real}"] + list(lines)) + "\n")
+
+    # Unpacked by GameShelf: the same row now offers Remove archive and the game.
+    os.makedirs(f"{tmp}/Games/Ball.Game/game")
+    open(f"{tmp}/Games/Ball.Game/game/Ball.exe", "w").write("MZ")
+    state_of(f"{dl}/Ball.Game.zip", "state=ready", "kind=unpack", f"dest={tmp}/Games/Ball.Game")
+    # Being unpacked right now.
+    open(f"{dl}/Town.to.City.rar", "w").write("Rar!")
+    state_of(f"{dl}/Town.to.City.rar", "state=running", "kind=unpack", f"dest={tmp}/Games")
+    # An installer that left a game inside its prefix.
+    os.makedirs(f"{tmp}/pfx/drive_c/Games/Borderlands/game")
+    open(f"{tmp}/pfx/drive_c/Games/Borderlands/game/Borderlands4.exe", "w").write("MZ")
+    os.makedirs(f"{dl}/Borderlands.4.v1.11.REPACK-KaOs")
+    open(f"{dl}/Borderlands.4.v1.11.REPACK-KaOs/Install.exe", "w").write("MZ")
+    state_of(f"{dl}/Borderlands.4.v1.11.REPACK-KaOs/Install.exe", "state=ready", "kind=install",
+             f"prefix={tmp}/pfx", f"game={tmp}/pfx/drive_c/Games/Borderlands/game/Borderlands4.exe")
+
+    # The scan never lists an archive itself — that would hold the panel for a
+    # minute on a cold 16 GB rar — it only reports how many are unanswered.
+    opts3 = {"home": tmp, "sources": ["folders"], "stateDir": states_dir,
+             "folders": [dl, f"{tmp}/Games"]}
+    warm = scan(opts3)
+    assert warm["pendingClassification"] == 2, warm["pendingClassification"]
+    assert not [g for g in warm["games"] if "Fresh.Game.zip" in g["id"]], \
+        "an unclassified archive gets no row yet"
+    classify_archives(opts3)
+
+    out3 = scan(opts3)
+    assert out3["pendingClassification"] == 0, out3["pendingClassification"]
+    ids3 = {g["id"]: g for g in out3["games"]}
+    fresh = ids3["file:" + os.path.realpath(f"{dl}/Fresh.Game.zip")]
+    assert fresh["action"] == "Unpack" and fresh["name"] == "Fresh Game", fresh
+    assert fresh["launch"] == [] and fresh["run"][-1] == os.path.realpath(f"{dl}/Fresh.Game.zip"), fresh
+    ball = ids3["file:" + os.path.realpath(f"{dl}/Ball.Game.zip")]
+    assert ball["action"] == "Remove archive", ball
+    assert ball["launch"] == [WINE_RUN, "--proton",
+                              os.path.realpath(f"{tmp}/Games/Ball.Game/game/Ball.exe")], ball
+    assert ball["remove"]["trash"][-1] == "--trash" and ball["remove"]["delete"][-1] == "--delete", ball
+    assert "file:" + os.path.realpath(f"{tmp}/Games/Ball.Game/game/Ball.exe") not in ids3, \
+        "the archive row owns its unpacked game, so it is not listed twice"
+    town = ids3["file:" + os.path.realpath(f"{dl}/Town.to.City.rar")]
+    assert town["state"] == "running" and town["status"] == "Unpacking…", town
+    assert town["launch"] == [] and town["action"] == "Unpack", town
+    fit = ids3["file:" + os.path.realpath(f"{dl}/Teardown [FitGirl Repack]/Setup.exe")]
+    assert fit["action"] == "Install Teardown" and fit["name"] == "Teardown", fit
+    border = ids3["file:" + os.path.realpath(f"{tmp}/pfx/drive_c/Games/Borderlands/game/Borderlands4.exe")]
+    assert border["name"] == "Borderlands 4", border
+    assert border["launch"] == [WINE_RUN, "--proton", "--in", os.path.realpath(f"{tmp}/pfx"),
+                                os.path.realpath(f"{tmp}/pfx/drive_c/Games/Borderlands/game/Borderlands4.exe")], border
+    assert "file:" + os.path.realpath(f"{dl}/Borderlands.4.v1.11.REPACK-KaOs/Install.exe") not in ids3, \
+        "an installed installer is not offered again"
+    assert not [i for i in ids3 if "Texture.Pack.zip" in i], "a texture pack is not an unpackable game"
+    assert not [i for i in ids3 if "Has.Twin.zip" in i], \
+        "an archive with an unpacked twin next to it is not offered again"
+    assert ids3["file:" + os.path.realpath(f"{dl}/Has.Twin/start.sh")]["launch"] != [], \
+        "the folder row still lists the unpacked twin"
+
     out2 = scan({"home": tmp, "sources": ["steam"], "folders": [f"{tmp}/games"],
                  "hidden": ["steam:123"]})
     assert out2["games"] == [], out2
@@ -631,6 +996,11 @@ def main():
                 opts = json.loads(arg)
             except ValueError:
                 pass
+    # --classify: the background pass that lists the archives once, so a panel
+    # open never waits for a 16 GB rar.
+    if "--classify" in sys.argv:
+        classify_archives(opts)
+        return
     print(json.dumps(scan(opts)))
 
 

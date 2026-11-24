@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.alexwest1981.gameshelf",
   "name": "GameShelf",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Alex",
   "license": "MIT",
-  "description": "One bar icon for every game installed on this machine: Steam, Lutris, Heroic and any folder you point it at, grouped by where the game came from. Sources and folders are settings.",
+  "description": "One bar icon for every game installed on this machine: Steam, Lutris, Heroic and any folder you point it at, grouped by where the game came from. Downloads that are not games yet show up too — unpack a repack archive, or run a game installer — and turn into a launchable row.",
   "kinds": [
     "bar-widget",
     "panel"

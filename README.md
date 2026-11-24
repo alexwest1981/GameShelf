@@ -5,6 +5,11 @@ games you added to it), Lutris, Heroic, anything with a game entry in your
 application menu, and any folder you point it at. Click the controller, type a
 few letters, play.
 
+A download that is not a game yet shows up here too: a repack archive gets
+**Unpack**, a downloaded installer gets **Install <game>**, and the same row
+turns into **Launch** when the game exists. See
+[Downloads that are not games yet](#downloads-that-are-not-games-yet).
+
 ![GameShelf](preview.jpg)
 
 [OmaGames](https://github.com/davidsmorais/omarchy-omagames) lists Omarchy *game
@@ -79,6 +84,8 @@ the panel).
 | **Heroic** | side-loaded apps, Epic (`legendary`) and GOG libraries under `~/.config/heroic/` | the game's own executable, otherwise `heroic://launch/<runner>/<app_name>` |
 | **Desktop** | `.desktop` entries with `Categories=Game` in `~/.local/share/applications`, `/usr/share/applications` and the Flatpak exports. Entries that are a front end for another library (Steam, Lutris, Heroic, Moonlight, Bottles, itch, RetroArch, Prism) are left to the source that owns their games | `gio launch <entry>` |
 | **Folders** | one starter per folder: the native starter if there is one, then an AppImage, then a bare `.exe` through Wine; helper scripts, installers and crash handlers are skipped | the executable itself — a script that lost its exec bit in the unpack goes through `bash` — and an `.exe` through `bin/game-wine.sh` |
+| **Archives** | `.rar`, `.zip` and `.7z` in a folder you scan, when the archive holds a starter, minus archives that already have an unpacked folder beside them | **Unpack** to `~/Games` (the game row appears when it is done) |
+| **Installers** | a folder whose only starter is `setup.exe` / `Install.exe` — FitGirl, KaOs, Vanya repacks, a GOG setup | **Install <game>** through Proton, then **Launch** |
 
 A folder whose only playable thing is a Windows `.exe` (a repack with `game/Game.exe`
 and nothing else) becomes a normal row, started through Wine in a **prefix of its
@@ -98,13 +105,58 @@ no per-launcher quoting, and no guessed command-line arguments.
 The list is built when the panel opens, so a new install shows up without a
 restart. Launching happens detached — the game keeps running if the panel closes.
 
+## Downloads that are not games yet
+
+A repack or an installer sitting in a folder you already scan becomes a row with
+its own button instead of something you unpack by hand first:
+
+| You downloaded | The row says | Pressing it |
+|---|---|---|
+| `Some.Game.rar` / `.zip` / `.7z` with a game inside | **Unpack** | unpacks into `~/Games/Some.Game` (`~/Games` is created if missing) |
+| `setup.exe` / `Install.exe` — FitGirl, KaOs, Vanya, a GOG setup | **Install Some Game** | runs the installer once, through Proton, in a prefix of its own |
+
+While the work runs the row says `Unpacking…` or `Installing…` and its button is
+greyed out. When it finishes the same row grows a working **Launch**, and its own
+button becomes **Remove archive** — which asks once whether the download should go
+to the trash (recoverable) or be deleted for good. The unpacked game is never
+touched by either answer.
+
+- **Where it lands.** Unpacking goes to `~/Games` (`GAMESHELF_GAMES_DIR` moves it),
+  which is in the default folder list, so the game keeps showing up after the row
+  is removed. An installed game lives inside its prefix under
+  `~/.local/share/gameshelf/wine/<name>-<hash>`, and the row carries that path.
+- **Proton, not bare Wine.** Installers, and the games they leave behind, run
+  through the Proton build Steam already has installed — with no Proton they fall
+  back to system Wine. That is what makes DXVK-era repacks and installers work, and
+  it costs one prefix per game, created on first use (a minute, once).
+- **The work outlives the panel.** `bin/game-setup.sh` does it and writes one state
+  file per task under `~/.local/share/gameshelf/tasks`; close the panel mid-unpack
+  and it keeps going, open it again and the row is still `Unpacking…`. The panel
+  rescans every two seconds while something is running.
+- **Which archives count.** One that holds a starter: an `.exe`, an `.AppImage`, a
+  Godot `.pck`, an Unreal `.pak`. Measured on this box: 15 of 16 flagged archives
+  were games and no texture or sound pack was flagged. Listing an archive is slow
+  the first time (a cold 16 GB rar takes ~20 s), so the scan never does it — the
+  panel runs `scan-games.py --classify` once in the background and rescans. Answers
+  are cached by size and mtime in `~/.local/share/gameshelf/archives.json`.
+- **An unpacked twin wins.** If `Some.Game/` already sits beside `Some.Game.rar`,
+  the folder row is the game and the archive is not offered again.
+- **Hiding one** works like any other id:
+
+  ```bash
+  omarchy bar set io.github.alexwest1981.gameshelf hiddenIds "file:/home/you/Downloads/Some.Game.rar"
+  ```
+
 ## Manual scan and tests
 
 The scanner is a standalone script; the widget and the panel both just run it.
 
 ```bash
 python3 scan-games.py '{"sources":["steam","heroic","folders"],"folders":["~/Downloads"]}' | python3 -m json.tool
+python3 scan-games.py --classify '{"sources":["folders"],"folders":["~/Downloads"]}'   # fill the archive cache
 python3 scan-games.py --selftest   # builds a fixture tree: every source must find its game, and the noise must stay out
+bash bin/game-wine.sh --selftest   # prefix under the configured dir, and --in wins over it
+bash bin/game-setup.sh --selftest  # unpack, state file, --trash, --delete, candidate search
 ```
 
 ## Dependencies
@@ -116,6 +168,14 @@ python3 scan-games.py --selftest   # builds a fixture tree: every source must fi
   APIs and never writes into their libraries — it only reads their manifest files.
 - `wine` and `md5sum` — needed only for a `Folders` row that is a bare `.exe`.
   Nothing else uses them.
+- `unrar` and `7z` — only for archives (`unrar` because 7z cannot read RAR5), plus
+  `zipfile` from python for `.zip`.
+- `gio` — only for **Remove archive → To the trash**.
+- `notify-send` — optional; the unpack/install helper announces start and finish
+  when it exists.
+- A Proton build (`~/.local/share/Steam/steamapps/common/Proton*`) — optional;
+  installers and the games they install use it, everything Wine falls back to
+  system `wine` without it.
 
 ## Known limits
 
@@ -134,6 +194,20 @@ python3 scan-games.py --selftest   # builds a fixture tree: every source must fi
   `MESA-EGL: egl: failed to create dri2 screen`), so it says nothing about a real
   GPU. If it stays white on your own screen, that one belongs in Steam, where
   Proton brings DXVK. The `.exe` row is still the right row to *find* it with.
+- **Installers are a one-shot guess.** The installer runs once, through Proton, and
+  then up to three executables it left in the prefix are offered (biggest first,
+  minus uninstallers, redistributables and crash handlers). One that wants .NET, a
+  reboot, or another launcher can end with nothing found: the row says
+  `Install failed` and `bin/game-wine.sh --in <prefix> <theirs>` is the manual way
+  in. `--setup` (winetricks) stays a bare-Wine tool, since Proton prepares its own
+  prefix.
+- **An archive needs a starter inside** to be offered: an `.exe`, an `.AppImage`, a
+  `.pck`, a `.pak`. A native Linux game zipped around a bare `.x86_64` binary is not
+  offered — unpack that one by hand; the folder row finds it.
+- **One row per download.** Two repacks of the same game (a FitGirl and a KaOs) are
+  two rows. Hide one.
+- **The background classify pass runs from the panel.** The bar icon's count can be
+  one download short until the panel has been opened once.
 - **Epic and GOG libraries are read defensively** — neither was installed when
   this was written, so those branches are unverified until they hold a game.
 - **A shortcut without an appid is skipped.** Steam writes one for every entry it

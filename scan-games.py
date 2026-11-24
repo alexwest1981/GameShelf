@@ -43,6 +43,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 
 DEPTH = 3  # how deep below a configured folder we look for a game launcher
@@ -596,6 +597,23 @@ def human_size(n):
     return "%d TB" % n
 
 
+STALE_AFTER = 2 * 3600  # a helper killed mid-run leaves state=running behind;
+                        # past this the row offers a retry instead of "Installing…"
+
+
+def is_stale(state):
+    """Only a running task can go stale: a finished one carries no timer."""
+    if state.get("state") != "running":
+        return False
+    try:
+        since = int(state.get("since") or 0)
+    except ValueError:
+        return False
+    # A file from before `since` existed is not evidence of a kill: only a
+    # timestamped run that is old is.
+    return since > 0 and time.time() - since > STALE_AFTER
+
+
 def failure_status(state, what):
     """'Install failed: <what the installer wrote>' when it said anything."""
     error = (state.get("error") or "").strip()
@@ -660,12 +678,13 @@ def scan_folders(opts, hidden, known_dirs, states, cache):
                 "action": "Unpack",
                 "run": [GAME_SETUP, "unpack", real],
             }
-            if state.get("state") == "running":
+            if state.get("state") == "running" and not is_stale(state):
                 row["state"] = "running"
                 row["status"] = "Unpacking…"
-            elif state.get("state") == "failed":
+            elif state.get("state") == "failed" or is_stale(state):
                 row["state"] = "failed"
-                row["status"] = failure_status(state, "Unpack")
+                row["status"] = (failure_status(state, "Unpack") if state.get("error")
+                                 else "Unpack was interrupted — press Unpack to retry")
             elif state.get("state") == "ready":
                 starter = first_game(state.get("dest") or "")
                 row["action"] = "Remove archive"
@@ -692,7 +711,7 @@ def scan_folders(opts, hidden, known_dirs, states, cache):
                 # walk cannot reach them.
                 title = clean_title(_folder_title(os.path.dirname(real)))
                 known_dirs.add(os.path.dirname(real))
-                if state.get("state") == "running":
+                if state.get("state") == "running" and not is_stale(state):
                     games.append({
                         "id": gid, "name": title, "source": "folders",
                         "detail": "Installing · " + real.replace(home, "~"),
@@ -716,9 +735,10 @@ def scan_folders(opts, hidden, known_dirs, states, cache):
                         "launch": [], "action": "Install " + title,
                         "run": [GAME_SETUP, "install", real],
                     }
-                    if state.get("state") == "failed":
+                    if state.get("state") == "failed" or is_stale(state):
                         row["state"] = "failed"
-                        row["status"] = failure_status(state, "Install")
+                        row["status"] = (failure_status(state, "Install") if state.get("error")
+                                         else "Install was interrupted — press Install to retry")
                     games.append(row)
                 continue
             if os.path.dirname(real) in known_dirs:
@@ -952,6 +972,16 @@ def selftest():
     open(f"{dl}/Broken.Game/setup.exe", "w").write("MZ")
     state_of(f"{dl}/Broken.Game/setup.exe", "state=failed", "kind=install",
              f"prefix={tmp}/pfx2", "error=Setup needs .NET Framework 4.8")
+    # A helper killed mid-run leaves state=running; the row must not sit on
+    # "Installing…" for ever, but a fresh run must still say it is working.
+    os.makedirs(f"{dl}/Stuck.Install")
+    open(f"{dl}/Stuck.Install/setup.exe", "w").write("MZ")
+    state_of(f"{dl}/Stuck.Install/setup.exe", "state=running", "kind=install",
+             f"prefix={tmp}/pfx3", "since=1")
+    os.makedirs(f"{dl}/Fresh.Install")
+    open(f"{dl}/Fresh.Install/setup.exe", "w").write("MZ")
+    state_of(f"{dl}/Fresh.Install/setup.exe", "state=running", "kind=install",
+             f"prefix={tmp}/pfx4", "since=%d" % time.time())
 
     # The scan never lists an archive itself — that would hold the panel for a
     # minute on a cold 16 GB rar — it only reports how many are unanswered.
@@ -983,6 +1013,10 @@ def selftest():
     assert fit["action"] == "Install Teardown" and fit["name"] == "Teardown", fit
     broken = ids3["file:" + os.path.realpath(f"{dl}/Broken.Game/setup.exe")]
     assert broken["state"] == "failed" and ".NET Framework" in broken["status"], broken
+    stuck = ids3["file:" + os.path.realpath(f"{dl}/Stuck.Install/setup.exe")]
+    assert stuck["state"] == "failed" and "interrupted" in stuck["status"], stuck
+    fresh = ids3["file:" + os.path.realpath(f"{dl}/Fresh.Install/setup.exe")]
+    assert fresh["state"] == "running" and fresh["status"] == "Installing…", fresh
     border = ids3["file:" + os.path.realpath(f"{tmp}/pfx/drive_c/Games/Borderlands/game/Borderlands4.exe")]
     assert border["name"] == "Borderlands 4", border
     assert border["launch"] == [WINE_RUN, "--proton", "--in", os.path.realpath(f"{tmp}/pfx"),

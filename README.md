@@ -167,13 +167,13 @@ GAMESHELF_VERBS="dotnet48 vcrun2022" ...        # several, space-separated
 ```
 
 Measured on this machine, because it is not the obvious path: **Proton's own wine
-cannot install .NET** (`dotnet48` ends at `dotNetFx40 … status 67` and leaves no
-`v4\Full` key at all; the `mscoree=d` override changes nothing). System Wine can —
-into a Proton prefix — and Proton then reads it: `Release 528049`
-(`Version 4.8.03761`), 1.3 GB of prefix, about 14 minutes including the download,
-once. So `--setup` on a Proton prefix runs `winetricks` with system Wine against
-`<prefix>/pfx`, and the game still starts under Proton, DXVK included. An existing
-prefix takes verbs afterwards with
+cannot install .NET** (`dotnet48` ends at `dotNetFx40 … status 67` after 70–78 s and
+leaves no `v4\Full` key at all; the `mscoree=d` override changes nothing). System
+Wine can — into a Proton prefix — and Proton then reads it: `Release 0x80eb1`
+(528049), `Version 4.8.03761`, 1.3 GB of prefix, **273 s including the download**
+(118 s with winetricks' cache warm). So `--setup` on a Proton prefix runs
+`winetricks` with system Wine against `<prefix>/pfx`, and the game still starts
+under Proton, DXVK included. An existing prefix takes verbs afterwards with
 `bin/game-wine.sh --proton --setup --in <prefix> <game>.exe dotnet48`.
 
 Costs `winetricks` and `cabextract` (both in Dependencies) and a network for the

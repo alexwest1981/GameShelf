@@ -739,6 +739,11 @@ def scan_folders(opts, hidden, known_dirs, states, cache):
                         row["state"] = "failed"
                         row["status"] = (failure_status(state, "Install") if state.get("error")
                                          else "Install was interrupted — press Install to retry")
+                        if state.get("needs"):
+                            # The log said what was missing, so one press does it:
+                            # the verbs into the prefix, then the installer again.
+                            row["action"] = "Prepare .NET"
+                            row["run"] = [GAME_SETUP, "install", "--verbs", state["needs"], real]
                     games.append(row)
                 continue
             if os.path.dirname(real) in known_dirs:
@@ -971,7 +976,7 @@ def selftest():
     os.makedirs(f"{dl}/Broken.Game")
     open(f"{dl}/Broken.Game/setup.exe", "w").write("MZ")
     state_of(f"{dl}/Broken.Game/setup.exe", "state=failed", "kind=install",
-             f"prefix={tmp}/pfx2", "error=Setup needs .NET Framework 4.8")
+             f"prefix={tmp}/pfx2", "error=Setup needs .NET Framework 4.8", "needs=dotnet48")
     # A helper killed mid-run leaves state=running; the row must not sit on
     # "Installing…" for ever, but a fresh run must still say it is working.
     os.makedirs(f"{dl}/Stuck.Install")
@@ -1013,6 +1018,11 @@ def selftest():
     assert fit["action"] == "Install Teardown" and fit["name"] == "Teardown", fit
     broken = ids3["file:" + os.path.realpath(f"{dl}/Broken.Game/setup.exe")]
     assert broken["state"] == "failed" and ".NET Framework" in broken["status"], broken
+    # A failure the log blamed on .NET turns the row's one button into the fix:
+    # the verbs go into the prefix and the installer runs again, in one press.
+    assert broken["action"] == "Prepare .NET", broken
+    assert broken["run"] == [GAME_SETUP, "install", "--verbs", "dotnet48",
+                             os.path.realpath(f"{dl}/Broken.Game/setup.exe")], broken
     stuck = ids3["file:" + os.path.realpath(f"{dl}/Stuck.Install/setup.exe")]
     assert stuck["state"] == "failed" and "interrupted" in stuck["status"], stuck
     fresh = ids3["file:" + os.path.realpath(f"{dl}/Fresh.Install/setup.exe")]

@@ -180,6 +180,12 @@ Costs `winetricks` and `cabextract` (both in Dependencies) and a network for the
 redistributable, once. A game that wants a *bare* Wine prefix (no Proton at all)
 gets one from a plain `.exe` row; nothing here forces Proton.
 
+When an install fails and the log it left names the framework, the row's one
+button becomes **Prepare .NET**: one press puts `dotnet48` in that prefix and runs
+the installer again, while the status line keeps the line the installer wrote, so
+it is still clear why. Nothing is detected in any other case — a row that fails
+for another reason keeps its `Install <game>` button.
+
 ## Environment
 
 Four variables, all optional — the defaults are what the panel uses:

@@ -86,7 +86,7 @@ the panel).
 | **Lutris** | `~/.config/lutris/games/*.yml` | `lutris:rungame/<slug>` |
 | **Heroic** | side-loaded apps, Epic (`legendary`) and GOG libraries under `~/.config/heroic/` | the game's own executable, otherwise `heroic://launch/<runner>/<app_name>` |
 | **Desktop** | `.desktop` entries with `Categories=Game` in `~/.local/share/applications`, `/usr/share/applications` and the Flatpak exports. Entries that are a front end for another library (Steam, Lutris, Heroic, Moonlight, Bottles, itch, RetroArch, Prism) are left to the source that owns their games | `gio launch <entry>` |
-| **Folders** | one starter per folder: the native starter if there is one, then an AppImage, then a bare `.exe` through Wine; helper scripts, installers and crash handlers are skipped | the executable itself — a script that lost its exec bit in the unpack goes through `bash` — and an `.exe` through `bin/game-wine.sh` |
+| **Folders** | one starter per folder: the native starter if there is one, then an AppImage, then a bare `.exe` through Wine; helper scripts and crash handlers are skipped, and a folder whose only starter is an installer becomes an **Install** row | the executable itself — a script that lost its exec bit in the unpack goes through `bash` — and an `.exe` through `bin/game-wine.sh` |
 | **Archives** | `.rar`, `.zip` and `.7z` in a folder you scan, when the archive holds a starter, minus archives that already have an unpacked folder beside them | **Unpack** to `~/Games` (the game row appears when it is done) |
 | **Installers** | a folder whose only starter is `setup.exe` / `Install.exe` — FitGirl, KaOs, Vanya repacks, a GOG setup | **Install <game>** through Proton, then **Launch** |
 
@@ -97,9 +97,13 @@ means a `winetricks` tweak or a 32-bit title in one prefix cannot break the next
 nothing is written into the game folder, and deleting the prefix is the whole
 uninstall. Point `GAMESHELF_WINE_DIR` somewhere else to move them.
 
-A game that needs a real Proton (DXVK/DLSS, anti-cheat, an installer) still
-belongs in Steam — add it there as a non-Steam game, which is what the `Steam
-shortcuts` source above is for.
+A bare `.exe` row — a repack you already unpacked by hand — starts through system
+Wine. Anything GameShelf itself produced (an unpacked archive, an installed game)
+starts through the Proton build Steam has installed, and falls back to system Wine
+when there is none. A `winetricks` tweak is a bare-Wine tool
+(`bin/game-wine.sh --setup`), since Proton prepares its own prefix. A game with
+anti-cheat still belongs in Steam — add it there as a non-Steam game, which is
+what the `Steam shortcuts` source above is for.
 
 Steam, Lutris and Heroic each register a URI handler on a normal install, so
 everything GameShelf does not own is started through `xdg-open`. One code path,
@@ -149,6 +153,20 @@ touched by either answer.
   ```bash
   omarchy bar set io.github.alexwest1981.gameshelf hiddenIds "file:/home/you/Downloads/Some.Game.rar"
   ```
+
+## Environment
+
+Four variables, all optional — the defaults are what the panel uses:
+
+| Variable | Default | What it moves |
+|---|---|---|
+| `GAMESHELF_GAMES_DIR` | `~/Games` | where **Unpack** puts a game |
+| `GAMESHELF_WINE_DIR` | `~/.local/share/gameshelf/wine` | the per-game Wine/Proton prefixes |
+| `GAMESHELF_PROTON` | *(first installed build)* | which Proton to run instead of `~/.local/share/Steam/steamapps/common/Proton*` |
+| `GAMESHELF_STATE_DIR` | `~/.local/share/gameshelf/tasks` | the one-file-per-task state the panel reads, and the archive cache beside it |
+
+The bar icon counts what can actually be started, so a download waiting to be
+unpacked does not inflate the number next to it.
 
 ## Manual scan and tests
 

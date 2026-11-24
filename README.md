@@ -100,10 +100,10 @@ uninstall. Point `GAMESHELF_WINE_DIR` somewhere else to move them.
 A bare `.exe` row — a repack you already unpacked by hand — starts through system
 Wine. Anything GameShelf itself produced (an unpacked archive, an installed game)
 starts through the Proton build Steam has installed, and falls back to system Wine
-when there is none. A `winetricks` tweak is a bare-Wine tool
-(`bin/game-wine.sh --setup`), since Proton prepares its own prefix. A game with
-anti-cheat still belongs in Steam — add it there as a non-Steam game, which is
-what the `Steam shortcuts` source above is for.
+when there is none. A `winetricks` tweak (`bin/game-wine.sh --setup`) follows the
+same split: bare Wine for a bare-Wine prefix, Proton's own wine for a Proton one.
+A game with anti-cheat still belongs in Steam — add it there as a non-Steam game,
+which is what the `Steam shortcuts` source above is for.
 
 Steam, Lutris and Heroic each register a URI handler on a normal install, so
 everything GameShelf does not own is started through `xdg-open`. One code path,
@@ -154,6 +154,32 @@ touched by either answer.
   omarchy bar set io.github.alexwest1981.gameshelf hiddenIds "file:/home/you/Downloads/Some.Game.rar"
   ```
 
+## A game that wants .NET
+
+Proton ships Wine-Mono (Experimental 11.0 carries `wine-mono-11.3.0`), and that is
+enough for many small .NET apps. A repack installer or a game built against the
+real framework wants the real framework, so name the winetricks verbs and they go
+into that game's own prefix before the installer runs:
+
+```sh
+GAMESHELF_VERBS=dotnet48 ./bin/game-setup.sh install ~/Downloads/Game/Setup.exe
+GAMESHELF_VERBS="dotnet48 vcrun2022" ...        # several, space-separated
+```
+
+Measured on this machine, because it is not the obvious path: **Proton's own wine
+cannot install .NET** (`dotnet48` ends at `dotNetFx40 … status 67` and leaves no
+`v4\Full` key at all; the `mscoree=d` override changes nothing). System Wine can —
+into a Proton prefix — and Proton then reads it: `Release 528049`
+(`Version 4.8.03761`), 1.3 GB of prefix, about 14 minutes including the download,
+once. So `--setup` on a Proton prefix runs `winetricks` with system Wine against
+`<prefix>/pfx`, and the game still starts under Proton, DXVK included. An existing
+prefix takes verbs afterwards with
+`bin/game-wine.sh --proton --setup --in <prefix> <game>.exe dotnet48`.
+
+Costs `winetricks` and `cabextract` (both in Dependencies) and a network for the
+redistributable, once. A game that wants a *bare* Wine prefix (no Proton at all)
+gets one from a plain `.exe` row; nothing here forces Proton.
+
 ## Environment
 
 Four variables, all optional — the defaults are what the panel uses:
@@ -197,6 +223,8 @@ bash bin/game-setup.sh --selftest  # unpack, state file, --trash, --delete, cand
 - A Proton build (`~/.local/share/Steam/steamapps/common/Proton*`) — optional;
   installers and the games they install use it, everything Wine falls back to
   system `wine` without it.
+- `winetricks` and `cabextract` — optional, only for `GAMESHELF_VERBS` / `--setup`
+  (a .NET or a VC++ runtime in a game's prefix).
 
 ## Known limits
 
@@ -217,11 +245,11 @@ bash bin/game-setup.sh --selftest  # unpack, state file, --trash, --delete, cand
   Proton brings DXVK. The `.exe` row is still the right row to *find* it with.
 - **Installers are a one-shot guess.** The installer runs once, through Proton, and
   then up to three executables it left in the prefix are offered (biggest first,
-  minus uninstallers, redistributables and crash handlers). One that wants .NET, a
-  reboot, or another launcher can end with nothing found: the row says
-  `Install failed` and `bin/game-wine.sh --in <prefix> <theirs>` is the manual way
-  in. `--setup` (winetricks) stays a bare-Wine tool, since Proton prepares its own
-  prefix.
+  minus uninstallers, redistributables and crash handlers). One that wants a
+  runtime, a reboot or another launcher can end with nothing found: the row shows
+  the last line the installer wrote, and it says why. `GAMESHELF_VERBS=dotnet48`
+  (see above) prepares the prefix against that; `bin/game-wine.sh --in <prefix>`
+  starts whatever it did leave.
 - **An archive needs a starter inside** to be offered: an `.exe`, an `.AppImage`, a
   `.pck`, a `.pak`. A native Linux game zipped around a bare `.x86_64` binary is not
   offered — unpack that one by hand; the folder row finds it.
